@@ -27,11 +27,7 @@
 
 This repository draws inspiration from Anthropic's groundbreaking mechanistic interpretability work on ["Tracing the Thoughts of Language Models"](https://www.anthropic.com/news/tracing-thoughts-language-model). While LLMs appear to generate text in a single forward pass, this toolkit reveals the complex internal reasoning processes occurring across their depths.
 
-<<<<<<< HEAD
-Through rigorous activation tracing, causal interventions, and dynamic visualizations, we expose the inner workings of neural networks as they perform complex multi-hop reasoning—enabling unprecedented insights into how these models "think".
-=======
 Through rigorous activation tracing, causal interventions and dynamic visualizations, this framework exposes the inner workings of neural networks as they perform complex multi-hop reasoning, enabling insights into how these models "think".
->>>>>>> bcae3da (Personalized readme)
 
 ## Key Features
 
@@ -50,11 +46,7 @@ cd llm-thought-tracing
 
 # Create a virtual environment (recommended)
 python -m venv myenv
-<<<<<<< HEAD
-source myenv/bin/activate  # On Windows: venv\Scripts\activate
-=======
 source myenv/bin/activate  # On Windows: myenv\Scripts\activate
->>>>>>> e0e7b68 (readme)
 
 # Install dependencies
 pip install -r requirements.txt
