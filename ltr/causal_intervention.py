@@ -2,9 +2,8 @@ import numpy as np
 import torch
 import gc
 from typing import List, Dict, Optional
-from transformers import PreTrainedModel, PreTrainedTokenizer
 from baukit import TraceDict
-from llm_reasoning_tracer.concept_extraction import get_layer_pattern_and_count
+from ltr.concept_extraction import get_layer_pattern_and_count
 
 def perform_causal_intervention(model, tokenizer, prompt: str,
                                 concepts: List[str],
@@ -295,9 +294,9 @@ def _causal_intervention_with_transformerlens(model, prompt, concepts, target_po
                     if hook_name in clean_cache and hook_name in patched_cache:
                         if patched_cache[hook_name].shape == clean_cache[hook_name].shape:
                             patched_cache[hook_name][0, patch_pos] = clean_cache[hook_name][0, patch_pos]
-                            
-                            # Run the model with the patched cache
-                            with torch.no_grad():                                try:
+                              # Run the model with the patched cache
+                            with torch.no_grad():
+                                try:
                                     # We need to get the tokenized version of the corrupted prompt
                                     corrupted_tokens = model.to_tokens(corrupted_prompt)
                                     patched_logits = model.forward(corrupted_tokens, return_type="logits", past_key_values=patched_cache)

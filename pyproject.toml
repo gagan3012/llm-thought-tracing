@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ltr"
+version = "0.1.0"
+description = "LLM Thought Tracing: Mechanistic Interpretability for Neural Reasoning"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "gbhat"},
+]
+dependencies = [
+    "numpy>=1.20.0",
+    "torch>=1.10.0",
+    "transformers>=4.20.0",
+    "baukit>=0.1.2",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/ltr"
+"Bug Tracker" = "https://github.com/yourusername/ltr/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ltr"]

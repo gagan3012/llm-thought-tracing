@@ -94,7 +94,8 @@ def extract_concept_activations(model, tokenizer, prompt: str,
 
     # Set up traces for all layers
     trace_layers = [layer_pattern.format(i) for i in range(n_layers)]
-      # Run the model with tracing
+    
+    # Run the model with tracing
     with torch.no_grad():
         with TraceDict(model, trace_layers) as traces:
             _ = model(**inputs)  # Run the model but don't need outputs
@@ -115,7 +116,8 @@ def extract_concept_activations(model, tokenizer, prompt: str,
             if layer_name not in traces:
                 logging.warning(f"Layer '{layer_name}' wasn't traced. Skipping.")
                 continue
-              # Get the layer output
+            
+            # Get the layer output
             layer_output = traces[layer_name].output
             
             # Handle different output shapes (some models may return different tensor dimensions)

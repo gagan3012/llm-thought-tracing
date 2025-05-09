@@ -49,6 +49,47 @@ cd llm-thought-tracing
 python -m venv myenv
 source myenv/bin/activate  # On Windows: myenv\Scripts\activate
 
+# Install with pip
+pip install -e .
+
+# Or install with UV for faster installation
+pip install uv
+uv pip install -e .
+```
+
+You can also install the package directly from GitHub:
+
+```bash
+pip install git+https://github.com/VilohitT/llm-thought-tracing.git
+```
+
+## Quick Start
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import ltr
+
+# Load model and tokenizer
+model_name = "gpt2"  # Or any HuggingFace model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+
+# Extract concept activations
+prompt = "To calculate 6 times 5, I multiply 6 by 5 to get 30."
+activations = ltr.extract_concept_activations(
+    model=model,
+    tokenizer=tokenizer,
+    prompt=prompt,
+    intermediate_concepts=["multiply", "multiplication"],
+    final_concepts=["30", "thirty"]
+)
+
+# Visualize the results
+import matplotlib.pyplot as plt
+fig = ltr.plot_concept_activations(activations)
+plt.show()
+```
+
 # Install dependencies
 pip install -r requirements.txt
 ```
