@@ -15,27 +15,6 @@ def get_layer_pattern_and_count(model):
     if "llama" in model_type:
         layer_pattern = "model.layers.{}.post_attention_layernorm"
         n_layers = model.config.num_hidden_layers
-    elif "gpt2" in model_type:
-        layer_pattern = "transformer.h.{}.ln_2"
-        n_layers = model.config.n_layer
-    elif "gpt_neox" in model_type:
-        layer_pattern = "gpt_neox.layers.{}.input_layernorm"
-        n_layers = model.config.num_hidden_layers
-    elif "mpt" in model_type:
-        layer_pattern = "transformer.blocks.{}.norm_2" 
-        n_layers = model.config.n_layers
-    elif "bloom" in model_type:
-        layer_pattern = "transformer.h.{}.post_attention_layernorm"
-        n_layers = model.config.n_layer
-    elif "mistral" in model_type:
-        layer_pattern = "model.layers.{}.post_attention_layernorm"
-        n_layers = model.config.num_hidden_layers
-    elif "falcon" in model_type:
-        layer_pattern = "transformer.h.{}.ln_2" if hasattr(model.transformer, "h") else "transformer.h.{}.input_layernorm"
-        n_layers = model.config.num_hidden_layers
-    elif "opt" in model_type:
-        layer_pattern = "model.decoder.layers.{}.final_layer_norm"
-        n_layers = model.config.num_hidden_layers
     elif "qwen" in model_type:
         layer_pattern = "model.layers.{}.post_attention_layernorm"
         n_layers = model.config.num_hidden_layers
