@@ -1,7 +1,6 @@
 import numpy as np
 import torch
-from typing import List, Dict, Optional
-from transformers import PreTrainedModel, PreTrainedTokenizer
+from typing import List, Dict
 from baukit import TraceDict
 import logging
 
@@ -117,13 +116,23 @@ def extract_concept_activations(model, tokenizer, prompt: str,
             if layer_name not in traces:
                 logging.warning(f"Layer '{layer_name}' wasn't traced. Skipping.")
                 continue
+              # Get the layer output
+            layer_output = traces[layer_name].output
             
-            # Get the layer output
-            layer_output = traces[layer_name].output[0]  # shape: [batch, seq_len, hidden_dim]
-            
+            # Handle different output shapes (some models may return different tensor dimensions)
+            if len(layer_output.shape) == 3:  # [batch, seq_len, hidden_dim]
+                layer_output = layer_output[0]  # Take the first batch
+            elif len(layer_output.shape) == 4:  # Some models include an extra dimension
+                layer_output = layer_output[0, 0]
+                
             # Start from position 1 to skip the first token
             for pos in range(1, n_tokens):
-                residual = layer_output[0, pos, :]
+                # Handle the case where output shape may be [seq_len, hidden_dim] or [hidden_dim]
+                if len(layer_output.shape) == 2:  # [seq_len, hidden_dim]
+                    residual = layer_output[pos]
+                else:  # Unexpected shape, try with best guess
+                    residual = layer_output
+                    logging.warning(f"Unexpected layer output shape: {layer_output.shape}. Using best guess.")
                 
                 # Project to the vocabulary space
                 projected_logits = residual @ output_weights.T
@@ -162,7 +171,7 @@ def _extract_with_transformerlens(model, prompt, intermediate_concepts, final_co
     model.cfg.use_attn_result = True
 
     logits, cache = model.run_with_cache(prompt)
-
+    
     results = {
         "prompt": prompt,
         "tokens": tokens,
@@ -171,12 +180,13 @@ def _extract_with_transformerlens(model, prompt, intermediate_concepts, final_co
         "activations": {concept: [] for concept in all_concepts},
         "activation_grid": {concept: np.zeros((n_layers, n_tokens-1)) for concept in all_concepts} 
     }
-
+    
     concept_token_ids = {}
     for concept in all_concepts:
         try:
             concept_token_ids[concept] = model.to_single_token(concept)
-        except:
+        except Exception as e:
+            logging.warning(f"Failed to convert '{concept}' to a single token in TransformerLens: {e}")
             continue
 
     for layer in range(n_layers):
