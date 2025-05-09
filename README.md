@@ -17,6 +17,7 @@
   - [Step 4: Analyzing and visualizing the Complete Reasoning Flow](#step-4-analyzing-and-visualizing-the-complete-reasoning-flow)
 - [Additional Research Examples](#additional-research-examples)
 - [Technical Framework](#technical-framework)
+- [Model Compatibility](#model-compatibility)
 - [Theoretical Background](#theoretical-background)
 - [Citation](#citation)
 - [Contributing](#contributing)
@@ -51,6 +52,7 @@ source myenv/bin/activate  # On Windows: myenv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 ```
+
 ## Showcase: Tracing Cultural Knowledge in *The Dark Knight*
 
 Let's demonstrate the full capabilities of this framework to systematically extract multi-hop reasoning traces from the model by prompting it on cultural knowledge. For this experiment, I use the following prompt:
@@ -323,6 +325,52 @@ def animate_reasoning_flow_dark(path_results, tokens, model_layers, figsize=(10,
 def plot_layer_position_intervention(intervention_results, selected_concepts=None, top_k_positions=3):
     """Visualize the effects of causal interventions across layers and positions."""
 ```
+
+## Model Compatibility
+
+This library supports both TransformerLens and HuggingFace models:
+
+- **TransformerLens models** (original implementation): Compatible with models loaded via the TransformerLens library
+- **HuggingFace models** (new implementation): Compatible with HuggingFace models via BauKit for layer activation tracing
+
+### Using with HuggingFace Models
+
+Here's a simple example using a HuggingFace model:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from llm_reasoning_tracer.concept_extraction import extract_concept_activations
+
+# Load model and tokenizer
+model_name = "gpt2"  # Or any HuggingFace model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+
+# Define prompt and concepts
+prompt = "To calculate 6 × 5, I multiply 6 by 5 to get 30."
+intermediate_concepts = ["multiply", "multiplication"]
+final_concepts = ["30", "thirty"]
+
+# Extract and analyze concept activations
+activations = extract_concept_activations(
+    model=model,
+    tokenizer=tokenizer,
+    prompt=prompt,
+    intermediate_concepts=intermediate_concepts,
+    final_concepts=final_concepts
+)
+
+# Visualize the results
+from llm_reasoning_tracer.visualization import plot_concept_activation_heatmap
+heatmap = plot_concept_activation_heatmap(activations)
+```
+
+The library automatically detects model architecture and applies appropriate layer tracing patterns, supporting a wide range of models including LLaMA, GPT-2, Mistral, Qwen, Falcon, and more.
+
+For more detailed examples, see the `examples/huggingface_example.py` file.
+
+---
+
 ## Theoretical Insights:
 
 - **Compositional Reasoning Through Hidden States**: LLMs solve problems by composing intermediate solutions across token positions and layers, rather than in a single step.

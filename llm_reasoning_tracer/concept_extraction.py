@@ -1,8 +1,55 @@
 import numpy as np
 import torch
 from typing import List, Dict, Optional
+from transformers import PreTrainedModel, PreTrainedTokenizer
+from baukit import TraceDict
+import logging
 
-def extract_concept_activations(model, prompt: str,
+def get_layer_pattern_and_count(model):
+    """
+    Determine the appropriate layer pattern and count for different model architectures.
+    """
+    model_type = model.config.model_type.lower() if hasattr(model.config, 'model_type') else ""
+    
+    # Configure layer patterns for popular model types
+    if "llama" in model_type:
+        layer_pattern = "model.layers.{}.post_attention_layernorm"
+        n_layers = model.config.num_hidden_layers
+    elif "gpt2" in model_type:
+        layer_pattern = "transformer.h.{}.ln_2"
+        n_layers = model.config.n_layer
+    elif "gpt_neox" in model_type:
+        layer_pattern = "gpt_neox.layers.{}.input_layernorm"
+        n_layers = model.config.num_hidden_layers
+    elif "mpt" in model_type:
+        layer_pattern = "transformer.blocks.{}.norm_2" 
+        n_layers = model.config.n_layers
+    elif "bloom" in model_type:
+        layer_pattern = "transformer.h.{}.post_attention_layernorm"
+        n_layers = model.config.n_layer
+    elif "mistral" in model_type:
+        layer_pattern = "model.layers.{}.post_attention_layernorm"
+        n_layers = model.config.num_hidden_layers
+    elif "falcon" in model_type:
+        layer_pattern = "transformer.h.{}.ln_2" if hasattr(model.transformer, "h") else "transformer.h.{}.input_layernorm"
+        n_layers = model.config.num_hidden_layers
+    elif "opt" in model_type:
+        layer_pattern = "model.decoder.layers.{}.final_layer_norm"
+        n_layers = model.config.num_hidden_layers
+    elif "qwen" in model_type:
+        layer_pattern = "transformer.h.{}.ln_2"
+        n_layers = model.config.num_hidden_layers
+    else:
+        # Default pattern for transformers
+        layer_pattern = "transformer.h.{}.ln_2"
+        n_layers = getattr(model.config, "n_layer", 
+                          getattr(model.config, "num_hidden_layers", 
+                                  getattr(model.config, "n_layers", 12)))
+        logging.warning(f"Unknown model type '{model_type}'. Using default layer pattern '{layer_pattern}' and {n_layers} layers.")
+    
+    return layer_pattern, n_layers
+
+def extract_concept_activations(model, tokenizer, prompt: str,
                                intermediate_concepts: List[str],
                                final_concepts: List[str],
                                logit_threshold: float = 0.001) -> Dict:
@@ -11,8 +58,10 @@ def extract_concept_activations(model, prompt: str,
     
     Parameters:
     -----------
-    model : HookedTransformer
+    model : PreTrainedModel
         The transformer model to analyze
+    tokenizer : PreTrainedTokenizer
+        The tokenizer corresponding to the model
     prompt : str
         The input text prompt
     intermediate_concepts : List[str]
@@ -27,7 +76,105 @@ def extract_concept_activations(model, prompt: str,
     Dict
         Detailed information about concept activations
     """
+    # For backward compatibility with existing code that passes a HookedTransformer
+    if hasattr(model, 'to_str_tokens') and hasattr(model, 'run_with_cache'):
+        return _extract_with_transformerlens(model, prompt, intermediate_concepts, final_concepts, logit_threshold)
     
+    # Determine layer pattern and count for the model
+    layer_pattern, n_layers = get_layer_pattern_and_count(model)
+    
+    # Tokenize the prompt
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    tokens = tokenizer.convert_ids_to_tokens(inputs.input_ids[0])
+    n_tokens = len(tokens)
+    all_concepts = intermediate_concepts + final_concepts
+
+    # Create result structure
+    results = {
+        "prompt": prompt,
+        "tokens": tokens,
+        "intermediate_concepts": intermediate_concepts,
+        "final_concepts": final_concepts,
+        "activations": {concept: [] for concept in all_concepts},
+        "activation_grid": {concept: np.zeros((n_layers, n_tokens-1)) for concept in all_concepts} 
+    }
+
+    # Get token IDs for all concepts
+    concept_token_ids = {}
+    for concept in all_concepts:
+        try:
+            # For better compatibility with different tokenizers
+            concept_tokens = tokenizer.encode(" " + concept, add_special_tokens=False)
+            if len(concept_tokens) == 1:  # Only use single token concepts
+                concept_token_ids[concept] = concept_tokens[0]
+            else:
+                logging.warning(f"Concept '{concept}' maps to multiple tokens. Using first token.")
+                concept_token_ids[concept] = concept_tokens[0]
+        except Exception as e:
+            logging.warning(f"Failed to encode concept '{concept}': {e}")
+            continue
+
+    # Set up traces for all layers
+    trace_layers = [layer_pattern.format(i) for i in range(n_layers)]
+    
+    # Run the model with tracing
+    with torch.no_grad():
+        with TraceDict(model, trace_layers) as traces:
+            outputs = model(**inputs)
+        
+        # Get the output projection matrix
+        if hasattr(model, "lm_head"):
+            output_weights = model.lm_head.weight
+        elif hasattr(model, "cls"):
+            output_weights = model.cls.predictions.decoder.weight
+        else:
+            raise ValueError("Could not locate output projection matrix. This model architecture may not be supported.")
+        
+        # Process each layer and position
+        for layer in range(n_layers):
+            layer_name = layer_pattern.format(layer)
+            
+            # Skip if the layer wasn't traced
+            if layer_name not in traces:
+                logging.warning(f"Layer '{layer_name}' wasn't traced. Skipping.")
+                continue
+            
+            # Get the layer output
+            layer_output = traces[layer_name].output[0]  # shape: [batch, seq_len, hidden_dim]
+            
+            # Start from position 1 to skip the first token
+            for pos in range(1, n_tokens):
+                residual = layer_output[0, pos, :]
+                
+                # Project to the vocabulary space
+                projected_logits = residual @ output_weights.T
+                
+                # Check activation for each concept
+                for concept, concept_id in concept_token_ids.items():
+                    concept_score = projected_logits[concept_id].item()
+                    
+                    # Store in activation grid
+                    results["activation_grid"][concept][layer, pos-1] = concept_score
+                    
+                    # Store activations above threshold
+                    if concept_score > logit_threshold:
+                        results["activations"][concept].append({
+                            "layer": layer,
+                            "position": pos-1,
+                            "probability": concept_score,
+                            "context_token": tokens[pos]
+                        })
+    
+    # Calculate maximum probabilities per layer
+    results["layer_max_probs"] = {}
+    for concept in all_concepts:
+        layer_maxes = np.max(results["activation_grid"].get(concept, np.zeros((n_layers, n_tokens-1))), axis=1)
+        results["layer_max_probs"][concept] = layer_maxes
+
+    return results
+
+def _extract_with_transformerlens(model, prompt, intermediate_concepts, final_concepts, logit_threshold):
+    """Legacy function to maintain backward compatibility with TransformerLens models"""
     tokens = model.to_str_tokens(prompt)
     n_tokens = len(tokens)
     n_layers = model.cfg.n_layers
