@@ -37,11 +37,11 @@ def get_layer_pattern_and_count(model):
         layer_pattern = "model.decoder.layers.{}.final_layer_norm"
         n_layers = model.config.num_hidden_layers
     elif "qwen" in model_type:
-        layer_pattern = "transformer.h.{}.ln_2"
+        layer_pattern = "model.layers.{}.post_attention_layernorm"
         n_layers = model.config.num_hidden_layers
     else:
         # Default pattern for transformers
-        layer_pattern = "transformer.h.{}.ln_2"
+        layer_pattern = "model.layers.{}.post_attention_layernorm"
         n_layers = getattr(model.config, "n_layer", 
                           getattr(model.config, "num_hidden_layers", 
                                   getattr(model.config, "n_layers", 12)))
