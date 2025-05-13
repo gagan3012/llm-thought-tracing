@@ -20,7 +20,7 @@ setup(
     description="LLM Thought Tracing: Mechanistic Interpretability for Neural Reasoning",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/VilohitT/llm-thought-tracing",
+    url="https://github.com/gagan3012/llm-thought-tracing",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
