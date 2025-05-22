@@ -236,7 +236,7 @@ def trace_token_evolution(
                 
                 try:
                     # Get residual activations at this layer and position
-                    resid = traces[layer_pattern][0, pos].detach()
+                    resid = traces[layer_pattern].output[0, pos].detach()
                     
                     # Project to vocabulary space using the unembedding matrix
                     if isinstance(unembed, torch.nn.Linear):
