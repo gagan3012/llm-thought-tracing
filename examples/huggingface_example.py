@@ -3,15 +3,15 @@ Example usage of the LLM Reasoning Tracer with HuggingFace models
 """
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from llm_reasoning_tracer.concept_extraction import extract_concept_activations
-from llm_reasoning_tracer.reasoning_analysis import analyze_reasoning_paths
-from llm_reasoning_tracer.causal_intervention import perform_causal_intervention
-from llm_reasoning_tracer.visualization import (
+from ltr.concept_extraction import extract_concept_activations
+from ltr.reasoning_analysis import analyze_reasoning_paths
+from ltr.causal_intervention import perform_causal_intervention
+from ltr.visualization import (
     plot_concept_activation_heatmap,
     animate_concept_activation_diagonal,
     animate_reasoning_flow,
     plot_layer_position_intervention,
-    save_animation
+    save_animation,
 )
 import matplotlib.pyplot as plt
 from IPython.display import display

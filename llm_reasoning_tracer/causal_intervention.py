@@ -297,7 +297,8 @@ def _causal_intervention_with_transformerlens(model, prompt, concepts, target_po
                             patched_cache[hook_name][0, patch_pos] = clean_cache[hook_name][0, patch_pos]
                             
                             # Run the model with the patched cache
-                            with torch.no_grad():                                try:
+                            with torch.no_grad():                                
+                                try:
                                     # We need to get the tokenized version of the corrupted prompt
                                     corrupted_tokens = model.to_tokens(corrupted_prompt)
                                     patched_logits = model.forward(corrupted_tokens, return_type="logits", past_key_values=patched_cache)

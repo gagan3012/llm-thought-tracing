@@ -99,7 +99,7 @@ def logit_lens_analysis(
                 continue
             
             layer_results = []
-            layer_activations = traces[layer_pattern]
+            layer_activations = traces[layer_pattern].output
             
             # For each position, project to vocabulary space
             for pos in target_positions:

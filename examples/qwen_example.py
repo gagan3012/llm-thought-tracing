@@ -3,9 +3,9 @@ Example usage with Qwen model to demonstrate compatibility with various HuggingF
 """
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from llm_reasoning_tracer.concept_extraction import extract_concept_activations
-from llm_reasoning_tracer.reasoning_analysis import analyze_reasoning_paths
-from llm_reasoning_tracer.visualization import plot_concept_activation_heatmap, animate_reasoning_flow
+from ltr.concept_extraction import extract_concept_activations
+from ltr.reasoning_analysis import analyze_reasoning_paths
+from ltr.visualization import plot_concept_activation_heatmap, animate_reasoning_flow
 import matplotlib.pyplot as plt
 from IPython.display import display, HTML
 
