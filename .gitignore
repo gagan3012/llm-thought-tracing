@@ -6,6 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
+Racing_Thoughts/
+
 # Distribution / packaging
 .Python
 build/
