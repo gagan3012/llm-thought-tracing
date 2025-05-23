@@ -1,5 +1,5 @@
 """
-LTR - LLM Thought Tracing: Mechanistic Interpretability for Neural Reasoning
+LTR - Mechanistic Interpretability for Neural Reasoning
 
 A library for tracing and visualizing concept evolution in Large Language Models
 """
@@ -10,7 +10,16 @@ from ltr.causal_intervention import perform_causal_intervention
 from ltr.visualization import (
     plot_concept_activations,
     plot_causal_intervention_heatmap,
-    animate_concept_evolution
+    animate_concept_evolution,
+    plot_concept_activation_heatmap,
+    animate_concept_activation_diagonal,
+    animate_reasoning_flow,
+    animate_reasoning_flow_dark,
+    plot_layer_position_intervention,
+    save_animation,
+    plot_logit_lens_heatmap,
+    plot_token_evolution_curves,
+    plot_combined_logit_lens,
 )
 
 # Import attention analysis
@@ -97,7 +106,13 @@ __all__ = [
     'analyze_causal_entities', 'extract_entity_representations', 'compare_entity_representations',
     
     # Autoscoring
-    'autoscore_responses', 'evaluate_responses_with_reference', 'batch_evaluate_responses'
+    'autoscore_responses', 'evaluate_responses_with_reference', 'batch_evaluate_responses',
+
+    'plot_token_evolution_curves', 'plot_combined_logit_lens', 'plot_layer_position_intervention',
+
+    'save_animation', 'plot_logit_lens_heatmap', 'plot_concept_activation_heatmap',
+
+    'animate_concept_activation_diagonal', 'animate_reasoning_flow', 'animate_reasoning_flow_dark',
 ]
 
 __version__ = "0.2.0"
