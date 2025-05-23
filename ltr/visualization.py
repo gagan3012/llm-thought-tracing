@@ -3,6 +3,14 @@ import numpy as np
 import seaborn as sns
 from typing import List, Dict, Optional
 import warnings
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+import numpy as np
+import seaborn as sns
+from matplotlib.animation import FuncAnimation, PillowWriter
+from IPython.display import HTML
+from typing import List, Dict, Optional
+import warnings
 
 def plot_concept_activations(concept_results: Dict,
                             selected_concepts: Optional[List[str]] = None,
@@ -1310,3 +1318,625 @@ def save_animation(
     plt.close(fig)
 
     return anim
+
+def plot_logit_lens_heatmap(
+    logit_results: Dict,
+    target_layers: Optional[List[int]] = None,
+    target_positions: Optional[List[int]] = None,
+    figsize=(16, 10),
+    show_top_tokens: bool = True,
+    top_k_display: int = 1,
+) -> plt.Figure:
+    """
+    Plot a comprehensive logit lens heatmap showing token probabilities across layers and positions.
+
+    Parameters:
+    -----------
+    logit_results : Dict
+        Results from logit_lens_analysis
+    target_layers : Optional[List[int]]
+        Specific layers to visualize. If None, uses all available layers.
+    target_positions : Optional[List[int]]
+        Specific positions to visualize. If None, uses all available positions.
+    figsize : tuple
+        Figure size (width, height)
+    show_top_tokens : bool
+        Whether to overlay the most probable tokens on the heatmap
+    top_k_display : int
+        Number of top tokens to display on each cell
+
+    Returns:
+    --------
+    plt.Figure
+        Matplotlib figure with logit lens visualization
+    """
+    if "error" in logit_results:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(
+            0.5,
+            0.5,
+            f"Error in logit lens results: {logit_results['error']}",
+            ha="center",
+            va="center",
+            fontsize=14,
+            color="red",
+        )
+        ax.axis("off")
+        return fig
+
+    layer_results = logit_results["layer_results"]
+    tokens = logit_results["tokens"]
+
+    # Get available layers and positions
+    available_layers = sorted(layer_results.keys())
+    if target_layers is None:
+        target_layers = available_layers
+    else:
+        target_layers = [l for l in target_layers if l in available_layers]
+
+    if not target_layers:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(
+            0.5,
+            0.5,
+            "No valid layers to display",
+            ha="center",
+            va="center",
+            fontsize=14,
+        )
+        ax.axis("off")
+        return fig
+
+    # Get all available positions from the first layer
+    first_layer_results = layer_results[target_layers[0]]
+    available_positions = sorted(
+        [pos_data["position"] for pos_data in first_layer_results]
+    )
+
+    if target_positions is None:
+        target_positions = available_positions
+    else:
+        target_positions = [p for p in target_positions if p in available_positions]
+
+    if not target_positions:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(
+            0.5,
+            0.5,
+            "No valid positions to display",
+            ha="center",
+            va="center",
+            fontsize=14,
+        )
+        ax.axis("off")
+        return fig
+
+    # Create probability matrix and top token matrix
+    prob_matrix = np.zeros((len(target_layers), len(target_positions)))
+    top_tokens_matrix = [
+        [[] for _ in range(len(target_positions))] for _ in range(len(target_layers))
+    ]
+
+    # Fill matrices with data
+    for layer_idx, layer in enumerate(target_layers):
+        if layer in layer_results:
+            layer_data = layer_results[layer]
+            # Create position lookup for this layer
+            pos_lookup = {pos_data["position"]: pos_data for pos_data in layer_data}
+
+            for pos_idx, position in enumerate(target_positions):
+                if position in pos_lookup:
+                    pos_data = pos_lookup[position]
+                    top_tokens = pos_data["top_tokens"]
+
+                    if top_tokens:
+                        # Use the probability of the top token for the heatmap
+                        prob_matrix[layer_idx, pos_idx] = top_tokens[0][1]
+
+                        # Store top k tokens for display
+                        top_tokens_matrix[layer_idx][pos_idx] = top_tokens[
+                            :top_k_display
+                        ]
+
+    # Create the visualization
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Create heatmap
+    cmap = sns.color_palette("viridis", as_cmap=True)
+    im = ax.imshow(
+        prob_matrix,
+        aspect="auto",
+        cmap=cmap,
+        vmin=0,
+        vmax=np.max(prob_matrix) if np.max(prob_matrix) > 0 else 1,
+        origin="lower",
+    )
+
+    # Set ticks and labels
+    ax.set_xticks(range(len(target_positions)))
+    ax.set_xticklabels(
+        [
+            f"{tokens[pos]}\n(pos {pos})" if pos < len(tokens) else f"pos {pos}"
+            for pos in target_positions
+        ],
+        rotation=45,
+        ha="right",
+        fontsize=9,
+    )
+
+    ax.set_yticks(range(len(target_layers)))
+    ax.set_yticklabels([f"Layer {layer}" for layer in target_layers], fontsize=10)
+
+    # Add text annotations with top tokens if requested
+    if show_top_tokens:
+        for layer_idx in range(len(target_layers)):
+            for pos_idx in range(len(target_positions)):
+                top_tokens = top_tokens_matrix[layer_idx][pos_idx]
+                if top_tokens:
+                    # Create text for top tokens
+                    if top_k_display == 1:
+                        # Show only the top token and its probability
+                        token_text, prob = top_tokens[0]
+                        text = f"{token_text}\n{prob:.3f}"
+                        fontsize = 8
+                    else:
+                        # Show multiple tokens
+                        text_parts = []
+                        for token_text, prob in top_tokens:
+                            text_parts.append(f"{token_text}:{prob:.2f}")
+                        text = "\n".join(text_parts)
+                        fontsize = 7
+
+                    # Choose text color based on background intensity
+                    bg_intensity = prob_matrix[layer_idx, pos_idx]
+                    text_color = "white" if bg_intensity > 0.5 else "black"
+
+                    ax.text(
+                        pos_idx,
+                        layer_idx,
+                        text,
+                        ha="center",
+                        va="center",
+                        fontsize=fontsize,
+                        color=text_color,
+                        fontweight="bold" if bg_intensity > 0.3 else "normal",
+                    )
+
+    # Add colorbar
+    cbar = fig.colorbar(im, ax=ax, pad=0.02, shrink=0.8)
+    cbar.set_label("Token Probability", fontsize=12)
+    cbar.ax.tick_params(labelsize=10)
+
+    # Set labels and title
+    ax.set_xlabel("Token Position in Sequence", fontsize=12, labelpad=10)
+    ax.set_ylabel("Model Layer", fontsize=12, labelpad=10)
+
+    title = "Logit Lens Analysis: Token Predictions Across Layers"
+    if show_top_tokens:
+        title += f"\n(Showing top {top_k_display} token{'s' if top_k_display > 1 else ''} per cell)"
+
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=20)
+
+    # Add grid for better readability
+    ax.grid(which="major", color="white", linestyle="-", linewidth=0.5, alpha=0.3)
+    ax.set_axisbelow(False)
+
+    # Add subtle grid lines
+    ax.set_xticks(np.arange(-0.5, len(target_positions), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(target_layers), 1), minor=True)
+    ax.grid(which="minor", color="gray", linestyle="-", linewidth=0.5, alpha=0.2)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_token_evolution_curves(
+    evolution_results: Dict,
+    target_position: Optional[int] = None,
+    figsize=(12, 8),
+    max_tokens_display: int = 10,
+) -> plt.Figure:
+    """
+    Plot token probability evolution curves across layers.
+
+    Parameters:
+    -----------
+    evolution_results : Dict
+        Results from trace_token_evolution
+    target_position : Optional[int]
+        Specific position to analyze. If None, uses the middle position.
+    figsize : tuple
+        Figure size (width, height)
+    max_tokens_display : int
+        Maximum number of tokens to display in the legend
+
+    Returns:
+    --------
+    plt.Figure
+        Matplotlib figure with token evolution curves
+    """
+    if "error" in evolution_results:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(
+            0.5,
+            0.5,
+            f"Error in evolution results: {evolution_results['error']}",
+            ha="center",
+            va="center",
+            fontsize=14,
+            color="red",
+        )
+        ax.axis("off")
+        return fig
+
+    token_evolution = evolution_results["token_evolution"]
+    tokens = evolution_results["tokens"]
+    target_tokens = evolution_results["target_tokens"]
+
+    # Determine target position
+    if target_position is None:
+        # Use middle position as default
+        target_position = len(tokens) // 2
+
+    # Filter tokens that have data at the target position
+    valid_tokens = []
+    for token in target_tokens:
+        if token in token_evolution and target_position in token_evolution[token]:
+            if token_evolution[token][target_position]:  # Check if not empty
+                valid_tokens.append(token)
+
+    if not valid_tokens:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(
+            0.5,
+            0.5,
+            f"No valid token data at position {target_position}",
+            ha="center",
+            va="center",
+            fontsize=14,
+        )
+        ax.axis("off")
+        return fig
+
+    # Limit displayed tokens to avoid cluttered legend
+    if len(valid_tokens) > max_tokens_display:
+        # Sort by maximum probability to show most interesting tokens
+        token_max_probs = []
+        for token in valid_tokens:
+            max_prob = max(token_evolution[token][target_position].values())
+            token_max_probs.append((token, max_prob))
+
+        token_max_probs.sort(key=lambda x: x[1], reverse=True)
+        valid_tokens = [token for token, _ in token_max_probs[:max_tokens_display]]
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Use a colorblind-friendly palette
+    colors = sns.color_palette("tab10", len(valid_tokens))
+
+    for idx, token in enumerate(valid_tokens):
+        if token in token_evolution and target_position in token_evolution[token]:
+            layer_probs = token_evolution[token][target_position]
+
+            if layer_probs:  # Check if not empty
+                # Extract and sort by layer
+                layers = sorted(layer_probs.keys())
+                probs = [layer_probs[layer] for layer in layers]
+
+                ax.plot(
+                    layers,
+                    probs,
+                    label=f'"{token}"',
+                    marker="o",
+                    markersize=4,
+                    linewidth=2,
+                    color=colors[idx],
+                    alpha=0.8,
+                )
+
+    # Customize the plot
+    ax.set_xlabel("Model Layer", fontsize=12)
+    ax.set_ylabel("Token Probability", fontsize=12)
+    ax.set_title(
+        f"Token Probability Evolution at Position {target_position}\n"
+        f'Context token: "{tokens[target_position] if target_position < len(tokens) else "N/A"}"',
+        fontsize=14,
+        fontweight="bold",
+        pad=20,
+    )
+
+    # Add grid
+    ax.grid(True, linestyle="--", alpha=0.3)
+
+    # Format legend
+    if valid_tokens:
+        ax.legend(
+            bbox_to_anchor=(1.05, 1),
+            loc="upper left",
+            borderaxespad=0,
+            fontsize=10,
+            title="Target Tokens",
+            title_fontsize=11,
+        )
+
+    # Set y-axis to start from 0
+    ax.set_ylim(bottom=0)
+
+    # Add some styling
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_combined_logit_lens(
+    logit_results: Dict,
+    evolution_results: Optional[Dict] = None,
+    target_layers: Optional[List[int]] = None,
+    target_positions: Optional[List[int]] = None,
+    figsize=(20, 12),
+) -> plt.Figure:
+    """
+    Create a combined visualization showing both logit lens heatmap and token evolution curves.
+
+    Parameters:
+    -----------
+    logit_results : Dict
+        Results from logit_lens_analysis
+    evolution_results : Optional[Dict]
+        Results from trace_token_evolution. If None, only shows heatmap.
+    target_layers : Optional[List[int]]
+        Specific layers to visualize
+    target_positions : Optional[List[int]]
+        Specific positions to visualize
+    figsize : tuple
+        Figure size (width, height)
+
+    Returns:
+    --------
+    plt.Figure
+        Combined matplotlib figure
+    """
+    if evolution_results is not None:
+        # Create subplot layout: heatmap on left, evolution curves on right
+        fig = plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(1, 2, width_ratios=[2, 1], hspace=0.3)
+
+        # Create heatmap subplot
+        ax1 = fig.add_subplot(gs[0, 0])
+
+        # Plot heatmap (reuse logic from plot_logit_lens_heatmap but on specific axis)
+        _plot_logit_lens_on_axis(
+            ax1, logit_results, target_layers, target_positions, show_colorbar=True
+        )
+
+        # Create evolution curves subplot
+        ax2 = fig.add_subplot(gs[0, 1])
+
+        # Find middle position for evolution plot
+        if target_positions is not None and target_positions:
+            middle_pos = target_positions[len(target_positions) // 2]
+        else:
+            # Use all available positions and pick middle
+            layer_results = logit_results["layer_results"]
+            if layer_results:
+                first_layer = next(iter(layer_results.values()))
+                all_positions = [pos_data["position"] for pos_data in first_layer]
+                middle_pos = (
+                    all_positions[len(all_positions) // 2] if all_positions else 0
+                )
+            else:
+                middle_pos = 0
+
+        _plot_evolution_on_axis(ax2, evolution_results, middle_pos)
+
+        fig.suptitle(
+            "Comprehensive Logit Lens Analysis",
+            fontsize=16,
+            fontweight="bold",
+            y=0.95,
+        )
+
+    else:
+        # Only show heatmap
+        fig, ax = plt.subplots(figsize=figsize)
+        _plot_logit_lens_on_axis(
+            ax, logit_results, target_layers, target_positions, show_colorbar=True
+        )
+
+    plt.tight_layout()
+    return fig
+
+
+def _plot_logit_lens_on_axis(
+    ax, logit_results, target_layers=None, target_positions=None, show_colorbar=True
+):
+    """Helper function to plot logit lens heatmap on a specific axis."""
+    if "error" in logit_results:
+        ax.text(
+            0.5,
+            0.5,
+            f"Error: {logit_results['error']}",
+            ha="center",
+            va="center",
+            fontsize=14,
+            color="red",
+            transform=ax.transAxes,
+        )
+        ax.axis("off")
+        return
+
+    layer_results = logit_results["layer_results"]
+    tokens = logit_results["tokens"]
+
+    # Get layers and positions
+    available_layers = sorted(layer_results.keys())
+    if target_layers is None:
+        target_layers = available_layers
+    else:
+        target_layers = [l for l in target_layers if l in available_layers]
+
+    if not target_layers:
+        ax.text(
+            0.5,
+            0.5,
+            "No valid layers",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.axis("off")
+        return
+
+    first_layer_results = layer_results[target_layers[0]]
+    available_positions = sorted(
+        [pos_data["position"] for pos_data in first_layer_results]
+    )
+
+    if target_positions is None:
+        target_positions = available_positions
+    else:
+        target_positions = [p for p in target_positions if p in available_positions]
+
+    # Create matrices
+    prob_matrix = np.zeros((len(target_layers), len(target_positions)))
+    top_tokens_matrix = [
+        [[] for _ in range(len(target_positions))] for _ in range(len(target_layers))
+    ]
+
+    for layer_idx, layer in enumerate(target_layers):
+        if layer in layer_results:
+            layer_data = layer_results[layer]
+            pos_lookup = {pos_data["position"]: pos_data for pos_data in layer_data}
+
+            for pos_idx, position in enumerate(target_positions):
+                if position in pos_lookup:
+                    pos_data = pos_lookup[position]
+                    top_tokens = pos_data["top_tokens"]
+
+                    if top_tokens:
+                        prob_matrix[layer_idx, pos_idx] = top_tokens[0][1]
+                        top_tokens_matrix[layer_idx][pos_idx] = [top_tokens[0]]
+
+    # Plot heatmap
+    cmap = sns.color_palette("viridis", as_cmap=True)
+    im = ax.imshow(
+        prob_matrix,
+        aspect="auto",
+        cmap=cmap,
+        vmin=0,
+        vmax=np.max(prob_matrix) if np.max(prob_matrix) > 0 else 1,
+        origin="lower",
+    )
+
+    # Set labels
+    ax.set_xticks(range(len(target_positions)))
+    ax.set_xticklabels(
+        [
+            f"{tokens[pos]}\n({pos})" if pos < len(tokens) else f"pos {pos}"
+            for pos in target_positions
+        ],
+        rotation=45,
+        ha="right",
+        fontsize=8,
+    )
+
+    ax.set_yticks(range(len(target_layers)))
+    ax.set_yticklabels([f"L{layer}" for layer in target_layers], fontsize=9)
+
+    # Add token annotations
+    for layer_idx in range(len(target_layers)):
+        for pos_idx in range(len(target_positions)):
+            top_tokens = top_tokens_matrix[layer_idx][pos_idx]
+            if top_tokens:
+                token_text, prob = top_tokens[0]
+                bg_intensity = prob_matrix[layer_idx, pos_idx]
+                text_color = "white" if bg_intensity > 0.5 else "black"
+
+                ax.text(
+                    pos_idx,
+                    layer_idx,
+                    f"{token_text}\n{prob:.3f}",
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color=text_color,
+                    fontweight="bold" if bg_intensity > 0.3 else "normal",
+                )
+
+    if show_colorbar:
+        plt.colorbar(im, ax=ax, pad=0.02, shrink=0.8, label="Probability")
+
+    ax.set_xlabel("Token Position", fontsize=11)
+    ax.set_ylabel("Model Layer", fontsize=11)
+    ax.set_title("Logit Lens: Top Token Predictions", fontsize=12, fontweight="bold")
+
+
+def _plot_evolution_on_axis(ax, evolution_results, target_position):
+    """Helper function to plot token evolution on a specific axis."""
+    if "error" in evolution_results:
+        ax.text(
+            0.5,
+            0.5,
+            f"Error: {evolution_results['error']}",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.axis("off")
+        return
+
+    token_evolution = evolution_results["token_evolution"]
+    tokens = evolution_results["tokens"]
+    target_tokens = evolution_results["target_tokens"]
+
+    # Filter valid tokens
+    valid_tokens = []
+    for token in target_tokens:
+        if (
+            token in token_evolution
+            and target_position in token_evolution[token]
+            and token_evolution[token][target_position]
+        ):
+            valid_tokens.append(token)
+
+    if not valid_tokens:
+        ax.text(
+            0.5,
+            0.5,
+            "No valid tokens",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.axis("off")
+        return
+
+    # Plot evolution curves
+    colors = sns.color_palette("tab10", len(valid_tokens))
+
+    for idx, token in enumerate(valid_tokens[:5]):  # Limit to 5 tokens for clarity
+        layer_probs = token_evolution[token][target_position]
+        layers = sorted(layer_probs.keys())
+        probs = [layer_probs[layer] for layer in layers]
+
+        ax.plot(
+            layers,
+            probs,
+            label=f'"{token}"',
+            marker="o",
+            markersize=3,
+            linewidth=2,
+            color=colors[idx],
+        )
+
+    ax.set_xlabel("Layer", fontsize=11)
+    ax.set_ylabel("Probability", fontsize=11)
+    ax.set_title(
+        f"Token Evolution at Position {target_position}", fontsize=12, fontweight="bold"
+    )
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=9)
+    ax.set_ylim(bottom=0)
