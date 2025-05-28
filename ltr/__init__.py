@@ -70,6 +70,12 @@ from ltr.autoscoring import (
     batch_evaluate_responses
 )
 
+from ltr.subsequence_analysis import (
+    SubsequenceAnalyzer,
+    analyze_hallucination_subsequences,
+    evaluate_subsequence_causality,
+)
+
 # Define public API
 __all__ = [
     # Concept extraction
@@ -113,6 +119,8 @@ __all__ = [
     'save_animation', 'plot_logit_lens_heatmap', 'plot_concept_activation_heatmap',
 
     'animate_concept_activation_diagonal', 'animate_reasoning_flow', 'animate_reasoning_flow_dark',
+
+    'SubsequenceAnalyzer', 'analyze_hallucination_subsequences', 'evaluate_subsequence_causality',
 ]
 
 __version__ = "0.2.0"

@@ -7,6 +7,8 @@ __pycache__/
 *.so
 
 Racing_Thoughts/
+SAT/
+Internal_States_Reveal_Hallucination/
 
 # Distribution / packaging
 .Python
