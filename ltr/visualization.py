@@ -1477,7 +1477,7 @@ def plot_logit_lens_heatmap(
                     if top_k_display == 1:
                         # Show only the top token and its probability
                         token_text, prob = top_tokens[0]
-                        text = f"{token_text}\n{prob:.3f}"
+                        text = f"{token_text}"
                         fontsize = 8
                     else:
                         # Show multiple tokens

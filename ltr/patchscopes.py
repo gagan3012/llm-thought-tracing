@@ -140,10 +140,10 @@ def perform_patchscope_analysis(
                                 attn = traces[layer_pattern].attn_probs
                             else:
                                 # Try to extract from the last layer of the batch
-                                attn = traces[layer_pattern][0, :, -1, window_start:].mean(dim=0).detach().cpu().numpy()
+                                attn = traces[layer_pattern].output.mean(dim=0).detach().cpu().numpy()
                         else:
                             # Generic fallback
-                            attn = traces[layer_pattern][0, :, -1, window_start:].mean(dim=0).detach().cpu().numpy()
+                            attn = traces[layer_pattern].output.mean(dim=0).detach().cpu().numpy()
                             
                         attention_data[layer] = attn.tolist() if isinstance(attn, np.ndarray) else attn
                         
