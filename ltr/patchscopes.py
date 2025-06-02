@@ -102,9 +102,9 @@ def get_entity_token_ids(tokenizer, entities):
 
         # Remove duplicates and take most common patterns
         unique_tokens = list(set(found_tokens))
-        entity_mappings[entity] = unique_tokens[:3]  # Take up to 3 variations
+        entity_mappings[entity] = unique_tokens  # Take up to 3 variations
 
-        print(f"Entity '{entity}' mapped to token IDs: {unique_tokens[:3]}")
+        print(f"Entity '{entity}' mapped to token IDs: {unique_tokens}")
 
     return entity_mappings
 
