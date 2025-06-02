@@ -147,7 +147,7 @@ def trace_token_evolution(
     tokenizer, 
     prompt: str,
     target_tokens: List[str],
-    target_layers: int = 0
+    start_layer: int = 0
 ) -> Dict:
     """
     Traces the evolution of specific tokens through model layers.
@@ -157,7 +157,7 @@ def trace_token_evolution(
         tokenizer: The tokenizer for the model
         prompt: Input text to analyze
         target_tokens: List of tokens to trace through layers
-        target_layers: Layers to trace (default: 0)
+        start_layer: Layer to start tracing from
         
     Returns:
         Dict containing token evolution traces
