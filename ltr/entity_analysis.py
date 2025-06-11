@@ -291,23 +291,40 @@ def extract_entity_representations(
             # Run the model and trace activations
             with TraceDict(model, [layer_pattern]) as traces:
                 _ = model(**inputs)
-                
+
                 if layer_pattern in traces:
+                    # Extract the activations properly from the Trace object
+                    trace_output = traces[layer_pattern].output
+
+                    # Handle different output formats
+                    if isinstance(trace_output, tuple):
+                        # If the output is a tuple, take the first element (hidden states)
+                        activations = trace_output[0]
+                    else:
+                        # If it's already a tensor
+                        activations = trace_output
+
                     # Extract the activations for the entity
                     start_pos, end_pos = entity_pos
-                    entity_activations = traces[layer_pattern][0, start_pos:end_pos].detach().cpu()
-                    
+                    entity_activations = (
+                        activations[0, start_pos:end_pos].detach().cpu()
+                    )
+
                     # Average over the entity tokens
                     entity_representation = entity_activations.mean(dim=0).numpy()
-                    
+
                     # Store in results
                     entity_results[context_template] = {
                         "representation": entity_representation,
-                        "tokens": tokens[start_pos:end_pos]
+                        "tokens": tokens[start_pos:end_pos],
                     }
-        
+                else:
+                    logging.warning(
+                        f"Layer pattern '{layer_pattern}' not found in traces"
+                    )
+
         results["representations"][entity] = entity_results
-    
+
     return results
 
 
