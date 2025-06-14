@@ -72,8 +72,7 @@ from ltr.autoscoring import (
 
 from ltr.subsequence_analysis import (
     SubsequenceAnalyzer,
-    analyze_hallucination_subsequences,
-    evaluate_subsequence_causality,
+    analyze_hallucination_subsequences
 )
 
 # Define public API
