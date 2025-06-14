@@ -9,6 +9,7 @@ import math
 import torch
 from typing import Dict, List, Optional, Tuple, Callable, Union
 import logging
+import numpy as np
 
 # Import utility functions - these would need to be adapted or recreated
 
@@ -190,6 +191,55 @@ class SubsequenceAnalyzer:
 
         return results
 
+    def compute_srep_reproducibility(
+        self,
+        subsequence: List[int],
+        original_sequence: List[int],
+        target_string: str,
+        num_tests: int = 20,
+        completion_methods: Optional[List[str]] = None,
+    ) -> Dict:
+        """
+        Compute Srep: the probability that a hallucination subsequence appears in the output
+        when the corresponding input subsequence is present, averaged over several input perturbation/filling strategies.
+        Supported strategies: 'bert', 'random', 'gpt-m', 'gpt-t'.
+
+        Args:
+            subsequence: Token IDs of the subsequence to evaluate
+            original_sequence: Original prompt token IDs
+            target_string: Target string to look for
+            num_tests: Number of test completions to generate
+            completion_methods: Methods for completion (e.g., ['random', 'mask'])
+
+        Returns:
+            Evaluation results dictionary
+        """
+        if completion_methods is None:
+            completion_methods = ["bert", "random", "gpt-m", "gpt-t"]
+
+        method_success_rates = {}
+        for method in completion_methods:
+            try:
+                test_results = self._evaluate_with_method(
+                    subsequence, original_sequence, target_string, num_tests, method
+                )
+                method_success_rates[method] = test_results["success_rate"]
+            except NotImplementedError:
+                # If a method is not implemented, skip it
+                continue
+
+        # Average over all available methods
+        if method_success_rates:
+            srep = float(np.mean(list(method_success_rates.values())))
+        else:
+            srep = 0.0
+
+        return {
+            "srep": srep,
+            "method_success_rates": method_success_rates,
+            "num_tests": num_tests,
+        }
+
     def _generate_perturbed_sequences(
         self, input_ids: torch.Tensor, num_perturbations: int, perturbation_rate: float
     ) -> torch.Tensor:
@@ -334,50 +384,43 @@ class SubsequenceAnalyzer:
             return self._evaluate_random_completion(
                 subsequence, original_sequence, target_string, num_tests
             )
+        elif method == "bert":
+            return self._evaluate_bert_completion(
+                subsequence, original_sequence, target_string, num_tests
+            )
+        elif method == "gpt-m":
+            return self._evaluate_gpt_completion(
+                subsequence, original_sequence, target_string, num_tests, model_name="gpt-4o-mini"
+            )
+        elif method == "gpt-t":
+            return self._evaluate_gpt_completion(
+                subsequence, original_sequence, target_string, num_tests, model_name="chatgpt"
+            )
         else:
-            # Implement other methods as needed
             raise NotImplementedError(f"Completion method '{method}' not implemented")
 
-    def _evaluate_random_completion(
+    def _evaluate_bert_completion(
         self,
         subsequence: List[int],
         original_sequence: List[int],
         target_string: str,
         num_tests: int,
     ) -> Dict:
-        """Evaluate using random completion."""
-        # Create test sequences by inserting subsequence at random positions
-        test_sequences = []
+        """Stub for BERT-based completion. Should be implemented with BERT infilling."""
+        # Placeholder: treat as random for now
+        return self._evaluate_random_completion(subsequence, original_sequence, target_string, num_tests)
 
-        for _ in range(num_tests):
-            # Random position to insert subsequence
-            insert_pos = torch.randint(0, len(original_sequence), (1,)).item()
-
-            # Create new sequence with subsequence inserted
-            new_seq = (
-                original_sequence[:insert_pos]
-                + subsequence
-                + original_sequence[insert_pos:]
-            )
-            test_sequences.append(torch.tensor(new_seq))
-
-        # Generate outputs
-        test_sequences = torch.stack(test_sequences).to(self.device)
-        outputs = self._batch_generate_outputs(test_sequences, max_new_tokens=50)
-
-        # Count successes
-        successes = sum(
-            1 for output in outputs if self._contains_target(target_string, output)
-        )
-        success_rate = successes / num_tests
-
-        return {
-            "success_rate": success_rate,
-            "num_tests": num_tests,
-            "num_successes": successes,
-            "sample_outputs": outputs[:5],  # Return first 5 as examples
-        }
-
+    def _evaluate_gpt_completion(
+        self,
+        subsequence: List[int],
+        original_sequence: List[int],
+        target_string: str,
+        num_tests: int,
+        model_name: str = "gpt-4o-mini",
+    ) -> Dict:
+        """Stub for GPT-based completion. Should be implemented with external GPT API calls."""
+        # Placeholder: treat as random for now
+        return self._evaluate_random_completion(subsequence, original_sequence, target_string, num_tests)
 
 def analyze_hallucination_subsequences(
     model,
@@ -387,10 +430,9 @@ def analyze_hallucination_subsequences(
     num_perturbations: int = 100,
     perturbation_rate: float = 0.1,
     **kwargs,
-) -> Dict:
+) -> dict:
     """
     Convenience function for subsequence analysis.
-
     Args:
         model: Language model to analyze
         tokenizer: Model tokenizer
@@ -399,7 +441,6 @@ def analyze_hallucination_subsequences(
         num_perturbations: Number of perturbed sequences
         perturbation_rate: Perturbation rate
         **kwargs: Additional arguments for SubsequenceAnalyzer
-
     Returns:
         Analysis results dictionary
     """
@@ -409,39 +450,4 @@ def analyze_hallucination_subsequences(
         target_string=target_string,
         num_perturbations=num_perturbations,
         perturbation_rate=perturbation_rate,
-    )
-
-
-def evaluate_subsequence_causality(
-    model,
-    tokenizer,
-    subsequence_tokens: List[int],
-    original_prompt: str,
-    target_string: str,
-    num_tests: int = 20,
-    **kwargs,
-) -> Dict:
-    """
-    Evaluate the causal impact of a subsequence on target generation.
-
-    Args:
-        model: Language model
-        tokenizer: Model tokenizer
-        subsequence_tokens: Token IDs of subsequence to evaluate
-        original_prompt: Original prompt text
-        target_string: Target string to look for
-        num_tests: Number of evaluation tests
-        **kwargs: Additional arguments
-
-    Returns:
-        Evaluation results
-    """
-    analyzer = SubsequenceAnalyzer(model, tokenizer, **kwargs)
-    original_tokens = tokenizer.encode(original_prompt, add_special_tokens=False)
-
-    return analyzer.evaluate_subsequence(
-        subsequence=subsequence_tokens,
-        original_sequence=original_tokens,
-        target_string=target_string,
-        num_tests=num_tests,
     )

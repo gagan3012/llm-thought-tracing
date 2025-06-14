@@ -14,7 +14,7 @@ warnings.filterwarnings('ignore')
 
 # LTR imports
 from ltr.reasoning_analysis import analyze_reasoning_paths
-from ltr.subsequence_analysis import analyze_hallucination_subsequences, evaluate_subsequence_causality
+from ltr.subsequence_analysis import analyze_hallucination_subsequences, SubsequenceAnalyzer
 from ltr.logit_lens import logit_lens_analysis, trace_token_evolution
 from ltr.patchscopes import perform_patchscope_analysis, analyze_entity_trajectories
 from ltr.causal_intervention import perform_causal_intervention
@@ -216,7 +216,7 @@ class FaithfulnessEvaluator:
                                     prompt: str,
                                     verbalization: str,
                                     counterfactual: str) -> Dict[str, Any]:
-        """Analyze subsequence causality for faithfulness using causal interventions"""
+        """Analyze subsequence causality for faithfulness using Srep reproducibility metric"""
         try:
             # Step 1: Run subsequence analysis to identify key subsequences
             verbalization_results = analyze_hallucination_subsequences(
@@ -241,52 +241,64 @@ class FaithfulnessEvaluator:
             verb_subsequences = self._extract_best_subsequences(verbalization_results)
             counter_subsequences = self._extract_best_subsequences(counterfactual_results)
 
-            # Step 3: Use causal intervention to measure exact causal strength
-            verb_causal_strength = self._measure_causal_strength_with_intervention(
-                prompt, verbalization, verb_subsequences
-            )
-            print("Causal strength", verb_causal_strength)
+            # Step 3: Compute Srep for each key subsequence (average if multiple)
+            srep_scores = []
+            counter_srep_scores = []
+            original_tokens = self.tokenizer.encode(prompt, add_special_tokens=False)
+            analyzer = SubsequenceAnalyzer(self.model, self.tokenizer, device=self.device)
+            for subseq in verb_subsequences:
+                srep_result = analyzer.compute_srep_reproducibility(
+                    subsequence=subseq,
+                    original_sequence=original_tokens,
+                    target_string=verbalization,
+                    num_tests=20
+                )
+                srep_scores.append(srep_result["srep"])
+            for subseq in counter_subsequences:
+                srep_result = analyzer.compute_srep_reproducibility(
+                    subsequence=subseq,
+                    original_sequence=original_tokens,
+                    target_string=counterfactual,
+                    num_tests=20
+                )
+                counter_srep_scores.append(srep_result["srep"])
+            # Aggregate Srep (mean over top subsequences)
+            verb_srep = float(np.mean(srep_scores)) if srep_scores else 0.0
+            counter_srep = float(np.mean(counter_srep_scores)) if counter_srep_scores else 0.0
 
-            counter_causal_strength = self._measure_causal_strength_with_intervention(
-                prompt, counterfactual, counter_subsequences
-            )
+            # Step 4: Calculate faithfulness score based on Srep
+            total_srep = verb_srep + counter_srep
+            if total_srep > 0:
+                faithfulness_score = verb_srep / total_srep
+            else:
+                faithfulness_score = 0.5
 
-            print("Counter Causal strength", counter_causal_strength)
-
-            # Step 4: Get exact attention patterns for key tokens
+            # Step 5: Get attention analysis for completeness
             attention_analysis = self._analyze_attention_for_causality(
                 prompt, verbalization, counterfactual, verb_subsequences, counter_subsequences
             )
 
-            # Step 5: Calculate faithfulness based on causal intervention results
-            total_strength = verb_causal_strength + counter_causal_strength
-            print("Total strength", total_strength)
-            if total_strength > 0:
-                faithfulness_score = verb_causal_strength / total_strength
-            else:
-                faithfulness_score = 0.5
-
             return {
-                'verbalization_causal_strength': verb_causal_strength,
-                'counterfactual_causal_strength': counter_causal_strength,
+                'verbalization_srep': verb_srep,
+                'counterfactual_srep': counter_srep,
                 'faithfulness_score': faithfulness_score,
                 'verbalization_results': verbalization_results,
                 'counterfactual_results': counterfactual_results,
-                'relative_strength_ratio': verb_causal_strength / (counter_causal_strength + 1e-6),
-                'raw_verb_p_target': verbalization_results.get('p_target', 0.0),
-                'raw_counter_p_target': counterfactual_results.get('p_target', 0.0),
                 'attention_analysis': attention_analysis,
                 'key_subsequences': {
                     'verbalization': verb_subsequences,
                     'counterfactual': counter_subsequences
+                },
+                'srep_scores': {
+                    'verbalization': srep_scores,
+                    'counterfactual': counter_srep_scores
                 }
             }
-
-        except Exception as e:
-            logger.error(f"Error in subsequence analysis: {e}")
+        except Exception as exc:
+            logger.error("Error in subsequence Srep analysis: %s", exc)
             import traceback
             traceback.print_exc()
-            return {'error': str(e), 'faithfulness_score': 0.5}
+            return {'error': str(exc), 'faithfulness_score': 0.5}
 
     def _extract_best_subsequences(self, subsequence_results: Dict) -> List[List[int]]:
         """Extract the most promising subsequences from analysis results"""
