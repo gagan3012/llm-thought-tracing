@@ -80,7 +80,8 @@ class SubsequenceAnalyzer:
 
         Returns:
             Dictionary containing analysis results
-        """        logging.info("Starting subsequence analysis for target: '%s'", target_string)
+        """        
+        logging.info("Starting subsequence analysis for target: '%s'", target_string)
 
         # 1. Encode the prompt
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
@@ -103,7 +104,8 @@ class SubsequenceAnalyzer:
             if self._contains_target(target_string, text)
         ]
 
-        p_target = len(target_indices) / len(output_texts)        logging.info(
+        p_target = len(target_indices) / len(output_texts)        
+        logging.info(
             "Target '%s' appeared in %s/%s outputs (p = %.3f)",
             target_string, len(target_indices), len(output_texts), p_target
         )
