@@ -414,7 +414,7 @@ def _calculate_enhanced_path_score(
         factors.append(f"final concept confidence ({final_concept_score:.2f})")
 
     score_details["explanation"] = (
-        f"Path scored {final_score:.2f} based on " + ", ".join(factors)
+        f"Path {path} scored {final_score:.2f} based on " + ", ".join(factors)
     )
 
     print(f"Path {path} scored {final_score} based on " + ", ".join(factors))

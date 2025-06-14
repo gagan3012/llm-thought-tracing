@@ -10,11 +10,15 @@ import json
 import logging
 from tqdm import tqdm
 import warnings
-warnings.filterwarnings('ignore')
+
+warnings.filterwarnings("ignore")
 
 # LTR imports
 from ltr.reasoning_analysis import analyze_reasoning_paths
-from ltr.subsequence_analysis import analyze_hallucination_subsequences, SubsequenceAnalyzer
+from ltr.subsequence_analysis import (
+    analyze_hallucination_subsequences,
+    SubsequenceAnalyzer,
+)
 from ltr.logit_lens import logit_lens_analysis, trace_token_evolution
 from ltr.patchscopes import perform_patchscope_analysis, analyze_entity_trajectories
 from ltr.causal_intervention import perform_causal_intervention
@@ -36,6 +40,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FaithfulnessResult:
     """Container for faithfulness evaluation results"""
+
     sample_id: str
     prompt: str
     label: bool
@@ -73,9 +78,9 @@ class FaithfulnessEvaluator:
     6. LIME and SHAP baselines
     """
 
-    def __init__(self,
-                 model_name: str = "meta-llama/Llama-3.2-1B-Instruct",
-                 device: str = "auto"):
+    def __init__(
+        self, model_name: str = "meta-llama/Llama-3.2-1B-Instruct", device: str = "auto"
+    ):
         self.model_name = model_name
         self.device = device
         self.setup_model()
@@ -90,7 +95,7 @@ class FaithfulnessEvaluator:
             self.model_name,
             device_map=self.device,
             torch_dtype=torch.float16,
-            trust_remote_code=True
+            trust_remote_code=True,
         )
 
         if self.tokenizer.pad_token is None:
@@ -103,13 +108,12 @@ class FaithfulnessEvaluator:
         try:
             # LIME explainer for text
             self.lime_explainer = LimeTextExplainer(
-                class_names=['False', 'True'],
+                class_names=["False", "True"],
             )
 
             # SHAP explainer
             self.shap_explainer = shap.Explainer(
-                self._predict_proba_for_shap,
-                self.tokenizer
+                self._predict_proba_for_shap, self.tokenizer
             )
 
             logger.info("Baseline explainers initialized")
@@ -129,11 +133,17 @@ class FaithfulnessEvaluator:
             # else:
             #     raise ValueError("Unsupported file format. Use CSV or JSON.")
 
-            df = pd.read_parquet("hf://datasets/gagan3012/HallData/data/train-00000-of-00001.parquet").sample(n=10, random_state=43)
+            df = pd.read_parquet(
+                "hf://datasets/gagan3012/HallData/data/train-00000-of-00001.parquet"
+            ).sample(n=10, random_state=43)
 
             # Validate required columns
             required_columns = [
-                'prompt', 'label', 'object', 'verbalization', 'counterfactual_verbalization'
+                "prompt",
+                "label",
+                "object",
+                "verbalization",
+                "counterfactual_verbalization",
             ]
 
             missing_columns = [col for col in required_columns if col not in df.columns]
@@ -141,8 +151,10 @@ class FaithfulnessEvaluator:
                 raise ValueError(f"Missing required columns: {missing_columns}")
 
             # Convert label to boolean
-            if df['label'].dtype == 'object':
-                df['label'] = df['label'].map({'TRUE': True, 'FALSE': False, True: True, False: False})
+            if df["label"].dtype == "object":
+                df["label"] = df["label"].map(
+                    {"TRUE": True, "FALSE": False, True: True, False: False}
+                )
 
             logger.info(f"Loaded dataset with {len(df)} samples")
             logger.info(f"Label distribution: {df['label'].value_counts().to_dict()}")
@@ -153,25 +165,34 @@ class FaithfulnessEvaluator:
             logger.error(f"Error loading dataset: {e}")
             raise
 
-    def evaluate_reasoning_paths(self,
-                                prompt: str,
-                                object_entity: str,
-                                verbalization: str,
-                                counterfactual: str) -> Dict[str, Any]:
+    def evaluate_reasoning_paths(
+        self,
+        prompt: str,
+        object_entity: str,
+        verbalization: str,
+        counterfactual: str,
+        label: bool,
+    ) -> Dict[str, Any]:
         """Analyze reasoning paths for faithfulness"""
         try:
             # Define potential reasoning paths
+            # potential_paths = [
+            #     # Direct path: object -> verbalization
+            #     [object_entity, verbalization],
+            #     # Counterfactual path: object -> counterfactual
+            #     [object_entity, counterfactual],
+            #     # Extended reasoning paths
+            #     [object_entity, "property", verbalization],
+            #     [object_entity, "context", verbalization],
+            #     ["question", object_entity, verbalization],
+            #     # Counterfactual reasoning
+            #     ["question", object_entity, counterfactual],
+            # ]
             potential_paths = [
-                # Direct path: object -> verbalization
-                [object_entity, verbalization],
-                # Counterfactual path: object -> counterfactual
-                [object_entity, counterfactual],
-                # Extended reasoning paths
-                [object_entity, "property", verbalization],
-                [object_entity, "context", verbalization],
-                ["question", object_entity, verbalization],
-                # Counterfactual reasoning
-                ["question", object_entity, counterfactual],
+                [object_entity, verbalization, "True"],
+                [object_entity, verbalization, "False"],
+                [object_entity, counterfactual, "True"],
+                [object_entity, counterfactual, "False"],
             ]
 
             results = analyze_reasoning_paths(
@@ -181,41 +202,43 @@ class FaithfulnessEvaluator:
                 potential_paths=potential_paths,
                 concept_threshold=0.15,
                 use_causal_analysis=True,
-                use_attention_analysis=True
+                use_attention_analysis=True,
             )
 
             # Calculate faithfulness metrics
-            best_path = results.get('best_path', [])
-            best_score = results.get('best_path_score', 0.0)
+            best_path = results.get("best_path", [])
+            best_score = results.get("best_path_score", 0.0)
 
             # Check if best path supports correct verbalization
             faithful_path = verbalization in best_path
             counterfactual_path = counterfactual in best_path
+            answer = best_path[-1] if best_path else None
+
+            correct = answer == label and answer is not None
 
             faithfulness_score = best_score if faithful_path else 0.0
             if counterfactual_path:
                 faithfulness_score *= 0.3  # Penalize counterfactual paths
 
             return {
-                'best_path': best_path,
-                'best_score': best_score,
-                'faithful_path': faithful_path,
-                'counterfactual_path': counterfactual_path,
-                'faithfulness_score': faithfulness_score,
-                'all_paths': results.get('path_scores', []),
-                'concept_activations': results.get('concept_results', {}),
-                'causal_strengths': results.get('causal_strengths', {}),
-                'attention_patterns': results.get('attention_patterns', {})
+                "best_path": best_path,
+                "best_score": best_score,
+                "faithful_path": faithful_path,
+                "counterfactual_path": counterfactual_path,
+                "faithfulness_score": faithfulness_score,
+                "all_paths": results.get("path_scores", []),
+                "concept_activations": results.get("concept_results", {}),
+                "causal_strengths": results.get("causal_strengths", {}),
+                "attention_patterns": results.get("attention_patterns", {}),
             }
 
         except Exception as e:
             logger.error(f"Error in reasoning path analysis: {e}")
-            return {'error': str(e), 'faithfulness_score': 0.0}
+            return {"error": str(e), "faithfulness_score": 0.0}
 
-    def evaluate_subsequence_causality(self,
-                                    prompt: str,
-                                    verbalization: str,
-                                    counterfactual: str) -> Dict[str, Any]:
+    def evaluate_subsequence_causality(
+        self, prompt: str, verbalization: str, counterfactual: str
+    ) -> Dict[str, Any]:
         """Analyze subsequence causality for faithfulness using Srep reproducibility metric"""
         try:
             # Step 1: Run subsequence analysis to identify key subsequences
@@ -225,7 +248,7 @@ class FaithfulnessEvaluator:
                 prompt=prompt,
                 target_string=verbalization,
                 num_perturbations=50,
-                perturbation_rate=0.1
+                perturbation_rate=0.1,
             )
 
             counterfactual_results = analyze_hallucination_subsequences(
@@ -234,24 +257,28 @@ class FaithfulnessEvaluator:
                 prompt=prompt,
                 target_string=counterfactual,
                 num_perturbations=50,
-                perturbation_rate=0.1
+                perturbation_rate=0.1,
             )
 
             # Step 2: Extract key subsequences from analysis
             verb_subsequences = self._extract_best_subsequences(verbalization_results)
-            counter_subsequences = self._extract_best_subsequences(counterfactual_results)
+            counter_subsequences = self._extract_best_subsequences(
+                counterfactual_results
+            )
 
             # Step 3: Compute Srep for each key subsequence (average if multiple)
             srep_scores = []
             counter_srep_scores = []
             original_tokens = self.tokenizer.encode(prompt, add_special_tokens=False)
-            analyzer = SubsequenceAnalyzer(self.model, self.tokenizer, device=self.device)
+            analyzer = SubsequenceAnalyzer(
+                self.model, self.tokenizer, device=self.device
+            )
             for subseq in verb_subsequences:
                 srep_result = analyzer.compute_srep_reproducibility(
                     subsequence=subseq,
                     original_sequence=original_tokens,
                     target_string=verbalization,
-                    num_tests=20
+                    num_tests=20,
                 )
                 srep_scores.append(srep_result["srep"])
             for subseq in counter_subsequences:
@@ -259,12 +286,14 @@ class FaithfulnessEvaluator:
                     subsequence=subseq,
                     original_sequence=original_tokens,
                     target_string=counterfactual,
-                    num_tests=20
+                    num_tests=20,
                 )
                 counter_srep_scores.append(srep_result["srep"])
             # Aggregate Srep (mean over top subsequences)
             verb_srep = float(np.mean(srep_scores)) if srep_scores else 0.0
-            counter_srep = float(np.mean(counter_srep_scores)) if counter_srep_scores else 0.0
+            counter_srep = (
+                float(np.mean(counter_srep_scores)) if counter_srep_scores else 0.0
+            )
 
             # Step 4: Calculate faithfulness score based on Srep
             total_srep = verb_srep + counter_srep
@@ -275,34 +304,39 @@ class FaithfulnessEvaluator:
 
             # Step 5: Get attention analysis for completeness
             attention_analysis = self._analyze_attention_for_causality(
-                prompt, verbalization, counterfactual, verb_subsequences, counter_subsequences
+                prompt,
+                verbalization,
+                counterfactual,
+                verb_subsequences,
+                counter_subsequences,
             )
 
             return {
-                'verbalization_srep': verb_srep,
-                'counterfactual_srep': counter_srep,
-                'faithfulness_score': faithfulness_score,
-                'verbalization_results': verbalization_results,
-                'counterfactual_results': counterfactual_results,
-                'attention_analysis': attention_analysis,
-                'key_subsequences': {
-                    'verbalization': verb_subsequences,
-                    'counterfactual': counter_subsequences
+                "verbalization_srep": verb_srep,
+                "counterfactual_srep": counter_srep,
+                "faithfulness_score": faithfulness_score,
+                "verbalization_results": verbalization_results,
+                "counterfactual_results": counterfactual_results,
+                "attention_analysis": attention_analysis,
+                "key_subsequences": {
+                    "verbalization": verb_subsequences,
+                    "counterfactual": counter_subsequences,
                 },
-                'srep_scores': {
-                    'verbalization': srep_scores,
-                    'counterfactual': counter_srep_scores
-                }
+                "srep_scores": {
+                    "verbalization": srep_scores,
+                    "counterfactual": counter_srep_scores,
+                },
             }
         except Exception as exc:
             logger.error("Error in subsequence Srep analysis: %s", exc)
             import traceback
+
             traceback.print_exc()
-            return {'error': str(exc), 'faithfulness_score': 0.5}
+            return {"error": str(exc), "faithfulness_score": 0.5}
 
     def _extract_best_subsequences(self, subsequence_results: Dict) -> List[List[int]]:
         """Extract the most promising subsequences from analysis results"""
-        subsequence_levels = subsequence_results.get('subsequence_levels', {})
+        subsequence_levels = subsequence_results.get("subsequence_levels", {})
         best_subsequences = []
 
         # Get top subsequence from each length level
@@ -317,10 +351,9 @@ class FaithfulnessEvaluator:
         best_subsequences.sort(key=len, reverse=True)
         return best_subsequences[:3]  # Return top 3 subsequences
 
-    def _measure_causal_strength_with_intervention(self,
-                                                prompt: str,
-                                                target: str,
-                                                subsequences: List[List[int]]) -> float:
+    def _measure_causal_strength_with_intervention(
+        self, prompt: str, target: str, subsequences: List[List[int]]
+    ) -> float:
         """Use causal intervention to measure exact causal strength"""
         if not subsequences:
             # If no subsequences found, use alternative measurement
@@ -352,29 +385,35 @@ class FaithfulnessEvaluator:
                         num_interventions += 1
 
                 except Exception as e:
-                    logger.warning(f"Direct intervention failed for subsequence at {start_pos}: {e}")
+                    logger.warning(
+                        f"Direct intervention failed for subsequence at {start_pos}: {e}"
+                    )
                     continue
 
         # Method 2: If subsequence interventions fail, try token-level interventions
         if num_interventions == 0:
-            logger.info(f"No subsequence interventions worked, trying token-level for target: {target}")
-            token_level_effect = self._token_level_intervention_measurement(prompt, target)
+            logger.info(
+                f"No subsequence interventions worked, trying token-level for target: {target}"
+            )
+            token_level_effect = self._token_level_intervention_measurement(
+                prompt, target
+            )
             if token_level_effect > 0:
                 return token_level_effect
 
         # Method 3: Fallback to probability-based measurement
         if num_interventions == 0:
-            logger.info(f"No interventions worked, using baseline probability for target: {target}")
+            logger.info(
+                f"No interventions worked, using baseline probability for target: {target}"
+            )
             return self._measure_baseline_target_probability(prompt, target)
 
         # Return average causal strength across successful interventions
         return total_causal_effect / num_interventions
 
-    def _direct_intervention_measurement(self,
-                                      prompt: str,
-                                      target: str,
-                                      start_pos: int,
-                                      end_pos: int) -> float:
+    def _direct_intervention_measurement(
+        self, prompt: str, target: str, start_pos: int, end_pos: int
+    ) -> float:
         """Measure causal effect by directly intervening on token positions"""
 
         # Tokenize prompt
@@ -397,7 +436,9 @@ class FaithfulnessEvaluator:
                 modified_tokens[i] = torch.randint(0, vocab_size, (1,)).item()
 
         # Create modified prompt
-        modified_prompt = self.tokenizer.decode(modified_tokens, skip_special_tokens=True)
+        modified_prompt = self.tokenizer.decode(
+            modified_tokens, skip_special_tokens=True
+        )
 
         # Get probability with intervention
         intervention_prob = self._get_target_probability(modified_prompt, target)
@@ -405,8 +446,10 @@ class FaithfulnessEvaluator:
         # Calculate intervention effect
         causal_effect = abs(baseline_prob - intervention_prob)
 
-        logger.debug(f"Intervention at {start_pos}-{end_pos}: baseline={baseline_prob:.4f}, "
-                    f"intervention={intervention_prob:.4f}, effect={causal_effect:.4f}")
+        logger.debug(
+            f"Intervention at {start_pos}-{end_pos}: baseline={baseline_prob:.4f}, "
+            f"intervention={intervention_prob:.4f}, effect={causal_effect:.4f}"
+        )
 
         return causal_effect
 
@@ -437,8 +480,12 @@ class FaithfulnessEvaluator:
                     else:
                         continue
 
-                modified_prompt = self.tokenizer.decode(modified_tokens, skip_special_tokens=True)
-                intervention_prob = self._get_target_probability(modified_prompt, target)
+                modified_prompt = self.tokenizer.decode(
+                    modified_tokens, skip_special_tokens=True
+                )
+                intervention_prob = self._get_target_probability(
+                    modified_prompt, target
+                )
 
                 effect = abs(baseline_prob - intervention_prob)
                 total_effect += effect
@@ -459,7 +506,9 @@ class FaithfulnessEvaluator:
             target_count = 0
 
             for _ in range(num_samples):
-                inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+                inputs = self.tokenizer(prompt, return_tensors="pt").to(
+                    self.model.device
+                )
 
                 with torch.no_grad():
                     outputs = self.model.generate(
@@ -467,12 +516,11 @@ class FaithfulnessEvaluator:
                         max_new_tokens=50,
                         do_sample=True,
                         temperature=0.7,
-                        pad_token_id=self.tokenizer.pad_token_id
+                        pad_token_id=self.tokenizer.pad_token_id,
                     )
 
                 generated_text = self.tokenizer.decode(
-                    outputs[0][inputs.input_ids.shape[1]:],
-                    skip_special_tokens=True
+                    outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=True
                 )
 
                 if target.lower() in generated_text.lower():
@@ -486,8 +534,10 @@ class FaithfulnessEvaluator:
             # Combine both measurements
             combined_prob = 0.7 * generation_prob + 0.3 * logit_prob
 
-            logger.debug(f"Target '{target}' probability: generation={generation_prob:.4f}, "
-                        f"logit={logit_prob:.4f}, combined={combined_prob:.4f}")
+            logger.debug(
+                f"Target '{target}' probability: generation={generation_prob:.4f}, "
+                f"logit={logit_prob:.4f}, combined={combined_prob:.4f}"
+            )
 
             return combined_prob
 
@@ -542,10 +592,9 @@ class FaithfulnessEvaluator:
         else:
             return 0.1  # Very low probability
 
-    def _enhanced_subsequence_analysis_with_causality(self,
-                                                    prompt: str,
-                                                    verbalization: str,
-                                                    counterfactual: str) -> Dict[str, Any]:
+    def _enhanced_subsequence_analysis_with_causality(
+        self, prompt: str, verbalization: str, counterfactual: str
+    ) -> Dict[str, Any]:
         """Enhanced analysis combining subsequence analysis with direct causality measurement"""
 
         # Get subsequence analysis results
@@ -555,7 +604,7 @@ class FaithfulnessEvaluator:
             prompt=prompt,
             target_string=verbalization,
             num_perturbations=50,
-            perturbation_rate=0.1
+            perturbation_rate=0.1,
         )
 
         counter_results = analyze_hallucination_subsequences(
@@ -564,15 +613,17 @@ class FaithfulnessEvaluator:
             prompt=prompt,
             target_string=counterfactual,
             num_perturbations=50,
-            perturbation_rate=0.1
+            perturbation_rate=0.1,
         )
 
         # Extract baseline probabilities from subsequence analysis
-        verb_p_target = verb_results.get('p_target', 0.0)
-        counter_p_target = counter_results.get('p_target', 0.0)
+        verb_p_target = verb_results.get("p_target", 0.0)
+        counter_p_target = counter_results.get("p_target", 0.0)
 
-        logger.info(f"Subsequence analysis - Verb p_target: {verb_p_target:.4f}, "
-                  f"Counter p_target: {counter_p_target:.4f}")
+        logger.info(
+            f"Subsequence analysis - Verb p_target: {verb_p_target:.4f}, "
+            f"Counter p_target: {counter_p_target:.4f}"
+        )
 
         # If subsequence analysis shows meaningful results, use them
         if verb_p_target > 0.05 or counter_p_target > 0.05:
@@ -581,22 +632,27 @@ class FaithfulnessEvaluator:
             counter_causal = min(counter_p_target * 2, 1.0)
         else:
             # Fallback to direct measurement
-            verb_causal = self._measure_baseline_target_probability(prompt, verbalization)
-            counter_causal = self._measure_baseline_target_probability(prompt, counterfactual)
+            verb_causal = self._measure_baseline_target_probability(
+                prompt, verbalization
+            )
+            counter_causal = self._measure_baseline_target_probability(
+                prompt, counterfactual
+            )
 
         return {
-            'verbalization_causal_strength': verb_causal,
-            'counterfactual_causal_strength': counter_causal,
-            'verb_p_target': verb_p_target,
-            'counter_p_target': counter_p_target,
-            'measurement_method': 'subsequence_based' if (verb_p_target > 0.05 or counter_p_target > 0.05) else 'baseline'
+            "verbalization_causal_strength": verb_causal,
+            "counterfactual_causal_strength": counter_causal,
+            "verb_p_target": verb_p_target,
+            "counter_p_target": counter_p_target,
+            "measurement_method": "subsequence_based"
+            if (verb_p_target > 0.05 or counter_p_target > 0.05)
+            else "baseline",
         }
 
     # Update the main function to use the enhanced analysis
-    def evaluate_subsequence_causality(self,
-                                    prompt: str,
-                                    verbalization: str,
-                                    counterfactual: str) -> Dict[str, Any]:
+    def evaluate_subsequence_causality(
+        self, prompt: str, verbalization: str, counterfactual: str
+    ) -> Dict[str, Any]:
         """Analyze subsequence causality for faithfulness using enhanced methods"""
         try:
             # Use enhanced analysis that handles zero values
@@ -604,11 +660,13 @@ class FaithfulnessEvaluator:
                 prompt, verbalization, counterfactual
             )
 
-            verb_causal_strength = enhanced_results['verbalization_causal_strength']
-            counter_causal_strength = enhanced_results['counterfactual_causal_strength']
+            verb_causal_strength = enhanced_results["verbalization_causal_strength"]
+            counter_causal_strength = enhanced_results["counterfactual_causal_strength"]
 
-            logger.info(f"Enhanced causal strengths - Verb: {verb_causal_strength:.4f}, "
-                      f"Counter: {counter_causal_strength:.4f}")
+            logger.info(
+                f"Enhanced causal strengths - Verb: {verb_causal_strength:.4f}, "
+                f"Counter: {counter_causal_strength:.4f}"
+            )
 
             # Calculate faithfulness score
             total_strength = verb_causal_strength + counter_causal_strength
@@ -624,7 +682,7 @@ class FaithfulnessEvaluator:
                 prompt=prompt,
                 target_string=verbalization,
                 num_perturbations=50,
-                perturbation_rate=0.1
+                perturbation_rate=0.1,
             )
 
             counterfactual_results = analyze_hallucination_subsequences(
@@ -633,48 +691,58 @@ class FaithfulnessEvaluator:
                 prompt=prompt,
                 target_string=counterfactual,
                 num_perturbations=50,
-                perturbation_rate=0.1
+                perturbation_rate=0.1,
             )
 
             # Extract subsequences for attention analysis
             verb_subsequences = self._extract_best_subsequences(verbalization_results)
-            counter_subsequences = self._extract_best_subsequences(counterfactual_results)
+            counter_subsequences = self._extract_best_subsequences(
+                counterfactual_results
+            )
 
             # Get attention analysis
             attention_analysis = self._analyze_attention_for_causality(
-                prompt, verbalization, counterfactual, verb_subsequences, counter_subsequences
+                prompt,
+                verbalization,
+                counterfactual,
+                verb_subsequences,
+                counter_subsequences,
             )
 
             return {
-                'verbalization_causal_strength': verb_causal_strength,
-                'counterfactual_causal_strength': counter_causal_strength,
-                'faithfulness_score': faithfulness_score,
-                'verbalization_results': verbalization_results,
-                'counterfactual_results': counterfactual_results,
-                'relative_strength_ratio': verb_causal_strength / (counter_causal_strength + 1e-6),
-                'raw_verb_p_target': verbalization_results.get('p_target', 0.0),
-                'raw_counter_p_target': counterfactual_results.get('p_target', 0.0),
-                'attention_analysis': attention_analysis,
-                'key_subsequences': {
-                    'verbalization': verb_subsequences,
-                    'counterfactual': counter_subsequences
+                "verbalization_causal_strength": verb_causal_strength,
+                "counterfactual_causal_strength": counter_causal_strength,
+                "faithfulness_score": faithfulness_score,
+                "verbalization_results": verbalization_results,
+                "counterfactual_results": counterfactual_results,
+                "relative_strength_ratio": verb_causal_strength
+                / (counter_causal_strength + 1e-6),
+                "raw_verb_p_target": verbalization_results.get("p_target", 0.0),
+                "raw_counter_p_target": counterfactual_results.get("p_target", 0.0),
+                "attention_analysis": attention_analysis,
+                "key_subsequences": {
+                    "verbalization": verb_subsequences,
+                    "counterfactual": counter_subsequences,
                 },
-                'measurement_method': enhanced_results['measurement_method'],
-                'enhanced_analysis': enhanced_results
+                "measurement_method": enhanced_results["measurement_method"],
+                "enhanced_analysis": enhanced_results,
             }
 
         except Exception as e:
             logger.error(f"Error in subsequence analysis: {e}")
             import traceback
-            traceback.print_exc()
-            return {'error': str(e), 'faithfulness_score': 0.5}
 
-    def _analyze_attention_for_causality(self,
-                                      prompt: str,
-                                      verbalization: str,
-                                      counterfactual: str,
-                                      verb_subsequences: List[List[int]],
-                                      counter_subsequences: List[List[int]]) -> Dict:
+            traceback.print_exc()
+            return {"error": str(e), "faithfulness_score": 0.5}
+
+    def _analyze_attention_for_causality(
+        self,
+        prompt: str,
+        verbalization: str,
+        counterfactual: str,
+        verb_subsequences: List[List[int]],
+        counter_subsequences: List[List[int]],
+    ) -> Dict:
         """Analyze attention patterns for causal relationships"""
         try:
             from ltr.attention_analysis import analyze_attention_patterns
@@ -684,7 +752,7 @@ class FaithfulnessEvaluator:
                 model=self.model,
                 tokenizer=self.tokenizer,
                 prompt=prompt,
-                concepts=[verbalization, counterfactual]
+                concepts=[verbalization, counterfactual],
             )
 
             # Tokenize prompt for position analysis
@@ -702,40 +770,44 @@ class FaithfulnessEvaluator:
             )
 
             # Get concept-specific attention patterns
-            concept_attention = attention_results.get('concept_attention', {})
+            concept_attention = attention_results.get("concept_attention", {})
             verb_concept_attention = concept_attention.get(verbalization, {})
             counter_concept_attention = concept_attention.get(counterfactual, {})
 
             return {
-                'attention_maps': attention_results.get('attention_maps', {}),
-                'head_importance': attention_results.get('head_importance', {}),
-                'verbalization_attention_scores': verb_attention_scores,
-                'counterfactual_attention_scores': counter_attention_scores,
-                'verbalization_concept_attention': verb_concept_attention,
-                'counterfactual_concept_attention': counter_concept_attention,
-                'attention_focus_ratio': self._calculate_attention_focus_ratio(
+                "attention_maps": attention_results.get("attention_maps", {}),
+                "head_importance": attention_results.get("head_importance", {}),
+                "verbalization_attention_scores": verb_attention_scores,
+                "counterfactual_attention_scores": counter_attention_scores,
+                "verbalization_concept_attention": verb_concept_attention,
+                "counterfactual_concept_attention": counter_concept_attention,
+                "attention_focus_ratio": self._calculate_attention_focus_ratio(
                     verb_attention_scores, counter_attention_scores
-                )
+                ),
             }
 
         except Exception as e:
             logger.error(f"Error in attention analysis: {e}")
-            return {'error': str(e)}
+            return {"error": str(e)}
 
-    def _find_subsequence_positions(self, sequence: List[int], subsequence: List[int]) -> List[int]:
+    def _find_subsequence_positions(
+        self, sequence: List[int], subsequence: List[int]
+    ) -> List[int]:
         """Find all starting positions where subsequence appears in sequence"""
         positions = []
         for i in range(len(sequence) - len(subsequence) + 1):
-            if sequence[i:i+len(subsequence)] == subsequence:
+            if sequence[i : i + len(subsequence)] == subsequence:
                 positions.append(i)
         return positions
 
-    def _calculate_subsequence_attention(self,
-                                      attention_results: Dict,
-                                      token_ids: List[int],
-                                      subsequences: List[List[int]]) -> Dict:
+    def _calculate_subsequence_attention(
+        self,
+        attention_results: Dict,
+        token_ids: List[int],
+        subsequences: List[List[int]],
+    ) -> Dict:
         """Calculate attention scores focused on key subsequences"""
-        attention_maps = attention_results.get('attention_maps', {})
+        attention_maps = attention_results.get("attention_maps", {})
         subsequence_scores = {}
 
         for subseq_idx, subsequence in enumerate(subsequences):
@@ -747,7 +819,9 @@ class FaithfulnessEvaluator:
             # Calculate average attention to this subsequence across all heads
             head_scores = {}
             for (layer, head), attention_map in attention_maps.items():
-                if attention_map.shape[0] != len(token_ids) or attention_map.shape[1] != len(token_ids):
+                if attention_map.shape[0] != len(token_ids) or attention_map.shape[
+                    1
+                ] != len(token_ids):
                     continue
 
                 # Calculate average attention to subsequence positions
@@ -760,26 +834,32 @@ class FaithfulnessEvaluator:
 
                 head_scores[(layer, head)] = total_attention / len(subseq_positions)
 
-            subsequence_scores[f'subsequence_{subseq_idx}'] = {
-                'tokens': subsequence,
-                'positions': subseq_positions,
-                'head_scores': head_scores,
-                'average_attention': np.mean(list(head_scores.values())) if head_scores else 0.0
+            subsequence_scores[f"subsequence_{subseq_idx}"] = {
+                "tokens": subsequence,
+                "positions": subseq_positions,
+                "head_scores": head_scores,
+                "average_attention": np.mean(list(head_scores.values()))
+                if head_scores
+                else 0.0,
             }
 
         return subsequence_scores
 
-    def _calculate_attention_focus_ratio(self,
-                                      verb_scores: Dict,
-                                      counter_scores: Dict) -> float:
+    def _calculate_attention_focus_ratio(
+        self, verb_scores: Dict, counter_scores: Dict
+    ) -> float:
         """Calculate ratio of attention focus between verbalization and counterfactual"""
-        verb_avg = np.mean([
-            subseq['average_attention'] for subseq in verb_scores.values()
-        ]) if verb_scores else 0.0
+        verb_avg = (
+            np.mean([subseq["average_attention"] for subseq in verb_scores.values()])
+            if verb_scores
+            else 0.0
+        )
 
-        counter_avg = np.mean([
-            subseq['average_attention'] for subseq in counter_scores.values()
-        ]) if counter_scores else 0.0
+        counter_avg = (
+            np.mean([subseq["average_attention"] for subseq in counter_scores.values()])
+            if counter_scores
+            else 0.0
+        )
 
         total_attention = verb_avg + counter_avg
         if total_attention > 0:
@@ -787,10 +867,9 @@ class FaithfulnessEvaluator:
         else:
             return 0.5
 
-    def _enhanced_causal_intervention_analysis(self,
-                                            prompt: str,
-                                            verbalization: str,
-                                            counterfactual: str) -> Dict:
+    def _enhanced_causal_intervention_analysis(
+        self, prompt: str, verbalization: str, counterfactual: str
+    ) -> Dict:
         """Perform comprehensive causal intervention analysis"""
 
         # Get all important tokens from prompt
@@ -803,8 +882,10 @@ class FaithfulnessEvaluator:
             tokenizer=self.tokenizer,
             prompt=prompt,
             concepts=[verbalization],
-            target_positions=list(range(1, len(tokens) - 1)),  # All meaningful positions
-            patch_positions=list(range(len(tokens)))
+            target_positions=list(
+                range(1, len(tokens) - 1)
+            ),  # All meaningful positions
+            patch_positions=list(range(len(tokens))),
         )
 
         counter_intervention = perform_causal_intervention(
@@ -813,47 +894,62 @@ class FaithfulnessEvaluator:
             prompt=prompt,
             concepts=[counterfactual],
             target_positions=list(range(1, len(tokens) - 1)),
-            patch_positions=list(range(len(tokens)))
+            patch_positions=list(range(len(tokens))),
         )
 
         # Calculate intervention effects
-        verb_effects = self._extract_intervention_effects(verb_intervention, verbalization)
-        counter_effects = self._extract_intervention_effects(counter_intervention, counterfactual)
+        verb_effects = self._extract_intervention_effects(
+            verb_intervention, verbalization
+        )
+        counter_effects = self._extract_intervention_effects(
+            counter_intervention, counterfactual
+        )
 
         return {
-            'verbalization_intervention': verb_intervention,
-            'counterfactual_intervention': counter_intervention,
-            'verbalization_effects': verb_effects,
-            'counterfactual_effects': counter_effects,
-            'effect_ratio': verb_effects['total_effect'] / (counter_effects['total_effect'] + 1e-6)
+            "verbalization_intervention": verb_intervention,
+            "counterfactual_intervention": counter_intervention,
+            "verbalization_effects": verb_effects,
+            "counterfactual_effects": counter_effects,
+            "effect_ratio": verb_effects["total_effect"]
+            / (counter_effects["total_effect"] + 1e-6),
         }
 
-    def _extract_intervention_effects(self, intervention_result: Dict, target: str) -> Dict:
+    def _extract_intervention_effects(
+        self, intervention_result: Dict, target: str
+    ) -> Dict:
         """Extract and summarize intervention effects"""
-        token_importance = intervention_result.get('token_importance', {}).get(target, [])
+        token_importance = intervention_result.get("token_importance", {}).get(
+            target, []
+        )
 
         if not token_importance:
-            return {'total_effect': 0.0, 'max_effect': 0.0, 'num_important_tokens': 0}
+            return {"total_effect": 0.0, "max_effect": 0.0, "num_important_tokens": 0}
 
-        effects = [abs(item['impact']) for item in token_importance]
+        effects = [abs(item["impact"]) for item in token_importance]
 
         return {
-            'total_effect': sum(effects),
-            'max_effect': max(effects) if effects else 0.0,
-            'avg_effect': np.mean(effects) if effects else 0.0,
-            'num_important_tokens': len([e for e in effects if e > 0.01]),  # Threshold for importance
-            'top_tokens': sorted(token_importance, key=lambda x: abs(x['impact']), reverse=True)[:5]
+            "total_effect": sum(effects),
+            "max_effect": max(effects) if effects else 0.0,
+            "avg_effect": np.mean(effects) if effects else 0.0,
+            "num_important_tokens": len(
+                [e for e in effects if e > 0.01]
+            ),  # Threshold for importance
+            "top_tokens": sorted(
+                token_importance, key=lambda x: abs(x["impact"]), reverse=True
+            )[:5],
         }
 
-    def evaluate_logit_lens(self,
-                          prompt: str,
-                          verbalization: str,
-                          counterfactual: str) -> Dict[str, Any]:
+    def evaluate_logit_lens(
+        self, prompt: str, verbalization: str, counterfactual: str
+    ) -> Dict[str, Any]:
         """Analyze logit lens for faithfulness"""
         try:
             # Get model layers
-            n_layers = getattr(self.model.config, 'num_hidden_layers',
-                            getattr(self.model.config, 'n_layer', 12))
+            n_layers = getattr(
+                self.model.config,
+                "num_hidden_layers",
+                getattr(self.model.config, "n_layer", 12),
+            )
             target_layers = list(range(0, n_layers, max(1, n_layers // 8)))
 
             # Tokenize prompt
@@ -866,8 +962,10 @@ class FaithfulnessEvaluator:
                 tokenizer=self.tokenizer,
                 prompt=prompt,
                 target_layers=target_layers,
-                target_positions=list(range(max(0, n_tokens-5), n_tokens-1)),  # Focus on last few positions
-                top_k=10
+                target_positions=list(
+                    range(max(0, n_tokens - 5), n_tokens - 1)
+                ),  # Focus on last few positions
+                top_k=10,
             )
 
             print("Logit lens results:", results)
@@ -878,7 +976,7 @@ class FaithfulnessEvaluator:
                 tokenizer=self.tokenizer,
                 prompt=prompt,
                 target_tokens=[verbalization, counterfactual],
-                start_layer=0
+                start_layer=0,
             )
 
             print("Evolution results:", evolution_results)
@@ -905,45 +1003,47 @@ class FaithfulnessEvaluator:
             )
 
             # Calculate final faithfulness score
-            faithfulness_score = faithfulness_metrics['relative_strength']
+            faithfulness_score = faithfulness_metrics["relative_strength"]
 
             return {
-                'layer_predictions': results.get('layer_results', {}),
-                'token_evolution': evolution_results,
-                'verbalization_prob_evolution': verb_prob_evolution,
-                'counterfactual_prob_evolution': counter_prob_evolution,
-                'faithfulness_score': faithfulness_score,
-                'faithfulness_metrics': faithfulness_metrics,
-                'consistency_analysis': consistency_analysis,
-                'final_verbalization_prob': verb_prob_evolution.get('final_avg', 0.0),
-                'final_counterfactual_prob': counter_prob_evolution.get('final_avg', 0.0),
-                'layer_wise_comparison': self._compare_layer_predictions(
+                "layer_predictions": results.get("layer_results", {}),
+                "token_evolution": evolution_results,
+                "verbalization_prob_evolution": verb_prob_evolution,
+                "counterfactual_prob_evolution": counter_prob_evolution,
+                "faithfulness_score": faithfulness_score,
+                "faithfulness_metrics": faithfulness_metrics,
+                "consistency_analysis": consistency_analysis,
+                "final_verbalization_prob": verb_prob_evolution.get("final_avg", 0.0),
+                "final_counterfactual_prob": counter_prob_evolution.get(
+                    "final_avg", 0.0
+                ),
+                "layer_wise_comparison": self._compare_layer_predictions(
                     verb_prob_evolution, counter_prob_evolution
-                )
+                ),
             }
 
         except Exception as e:
             logger.error(f"Error in logit lens analysis: {e}")
             import traceback
-            traceback.print_exc()
-            return {'error': str(e), 'faithfulness_score': 0.5}
 
-    def _extract_token_probabilities(self,
-                                  evolution_results: Dict,
-                                  target_token: str,
-                                  target_layers: List[int]) -> Dict[str, Any]:
+            traceback.print_exc()
+            return {"error": str(e), "faithfulness_score": 0.5}
+
+    def _extract_token_probabilities(
+        self, evolution_results: Dict, target_token: str, target_layers: List[int]
+    ) -> Dict[str, Any]:
         """Extract probability evolution for a target token across layers and positions"""
 
-        token_evolution = evolution_results.get('token_evolution', {})
+        token_evolution = evolution_results.get("token_evolution", {})
         target_evolution = token_evolution.get(target_token, {})
 
         if not target_evolution:
             return {
-                'layer_probabilities': {},
-                'position_probabilities': {},
-                'average_by_layer': {},
-                'final_avg': 0.0,
-                'trend': 'flat'
+                "layer_probabilities": {},
+                "position_probabilities": {},
+                "average_by_layer": {},
+                "final_avg": 0.0,
+                "trend": "flat",
             }
 
         # Extract probabilities by layer and position
@@ -977,13 +1077,13 @@ class FaithfulnessEvaluator:
         if len(layer_averages) > 1:
             trend_slope = np.polyfit(range(len(layer_averages)), layer_averages, 1)[0]
             if trend_slope > 0.001:
-                trend = 'increasing'
+                trend = "increasing"
             elif trend_slope < -0.001:
-                trend = 'decreasing'
+                trend = "decreasing"
             else:
-                trend = 'flat'
+                trend = "flat"
         else:
-            trend = 'flat'
+            trend = "flat"
 
         # Final average across all layers and positions
         all_probs = []
@@ -992,49 +1092,52 @@ class FaithfulnessEvaluator:
         final_avg = np.mean(all_probs) if all_probs else 0.0
 
         return {
-            'layer_probabilities': layer_probabilities,
-            'position_probabilities': position_probabilities,
-            'average_by_layer': average_by_layer,
-            'final_avg': final_avg,
-            'trend': trend,
-            'max_probability': max(all_probs) if all_probs else 0.0,
-            'min_probability': min(all_probs) if all_probs else 0.0
+            "layer_probabilities": layer_probabilities,
+            "position_probabilities": position_probabilities,
+            "average_by_layer": average_by_layer,
+            "final_avg": final_avg,
+            "trend": trend,
+            "max_probability": max(all_probs) if all_probs else 0.0,
+            "min_probability": min(all_probs) if all_probs else 0.0,
         }
 
-    def _calculate_logit_lens_faithfulness(self,
-                                        verb_evolution: Dict,
-                                        counter_evolution: Dict,
-                                        target_layers: List[int]) -> Dict[str, float]:
+    def _calculate_logit_lens_faithfulness(
+        self, verb_evolution: Dict, counter_evolution: Dict, target_layers: List[int]
+    ) -> Dict[str, float]:
         """Calculate faithfulness metrics from logit lens analysis"""
 
-        verb_avg = verb_evolution.get('final_avg', 0.0)
-        counter_avg = counter_evolution.get('final_avg', 0.0)
+        verb_avg = verb_evolution.get("final_avg", 0.0)
+        counter_avg = counter_evolution.get("final_avg", 0.0)
 
         # Relative strength calculation
         total_prob = verb_avg + counter_avg
         relative_strength = verb_avg / total_prob if total_prob > 0 else 0.5
 
         # Trend analysis
-        verb_trend = verb_evolution.get('trend', 'flat')
-        counter_trend = counter_evolution.get('trend', 'flat')
+        verb_trend = verb_evolution.get("trend", "flat")
+        counter_trend = counter_evolution.get("trend", "flat")
 
         # Trend score (increasing verbalization trend is good for faithfulness)
         trend_score = 0.5  # Default neutral
-        if verb_trend == 'increasing' and counter_trend != 'increasing':
+        if verb_trend == "increasing" and counter_trend != "increasing":
             trend_score = 0.8
-        elif verb_trend == 'increasing' and counter_trend == 'increasing':
+        elif verb_trend == "increasing" and counter_trend == "increasing":
             trend_score = 0.6
-        elif verb_trend != 'decreasing' and counter_trend == 'decreasing':
+        elif verb_trend != "decreasing" and counter_trend == "decreasing":
             trend_score = 0.7
-        elif verb_trend == 'decreasing':
+        elif verb_trend == "decreasing":
             trend_score = 0.3
 
         # Layer consistency (how stable is the preference across layers)
-        verb_layer_avgs = list(verb_evolution.get('average_by_layer', {}).values())
-        counter_layer_avgs = list(counter_evolution.get('average_by_layer', {}).values())
+        verb_layer_avgs = list(verb_evolution.get("average_by_layer", {}).values())
+        counter_layer_avgs = list(
+            counter_evolution.get("average_by_layer", {}).values()
+        )
 
         if verb_layer_avgs and counter_layer_avgs:
-            verb_consistency = 1.0 - np.std(verb_layer_avgs)  # Lower std = higher consistency
+            verb_consistency = 1.0 - np.std(
+                verb_layer_avgs
+            )  # Lower std = higher consistency
             counter_consistency = 1.0 - np.std(counter_layer_avgs)
             overall_consistency = (verb_consistency + counter_consistency) / 2
         else:
@@ -1042,34 +1145,33 @@ class FaithfulnessEvaluator:
 
         # Final faithfulness score combining multiple factors
         faithfulness_score = (
-            relative_strength * 0.5 +
-            trend_score * 0.3 +
-            max(0, overall_consistency) * 0.2
+            relative_strength * 0.5
+            + trend_score * 0.3
+            + max(0, overall_consistency) * 0.2
         )
 
         return {
-            'relative_strength': relative_strength,
-            'trend_score': trend_score,
-            'consistency_score': max(0, overall_consistency),
-            'faithfulness_score': max(0, min(1, faithfulness_score)),
-            'verb_final_avg': verb_avg,
-            'counter_final_avg': counter_avg
+            "relative_strength": relative_strength,
+            "trend_score": trend_score,
+            "consistency_score": max(0, overall_consistency),
+            "faithfulness_score": max(0, min(1, faithfulness_score)),
+            "verb_final_avg": verb_avg,
+            "counter_final_avg": counter_avg,
         }
 
-    def _analyze_prediction_consistency(self,
-                                      logit_results: Dict,
-                                      verbalization: str,
-                                      counterfactual: str) -> Dict[str, Any]:
+    def _analyze_prediction_consistency(
+        self, logit_results: Dict, verbalization: str, counterfactual: str
+    ) -> Dict[str, Any]:
         """Analyze how consistently the model predicts verbalization vs counterfactual across layers"""
 
-        layer_results = logit_results.get('layer_results', {})
+        layer_results = logit_results.get("layer_results", {})
 
         consistency_metrics = {
-            'verbalization_appearances': 0,
-            'counterfactual_appearances': 0,
-            'total_predictions': 0,
-            'layer_consistency': {},
-            'position_consistency': {}
+            "verbalization_appearances": 0,
+            "counterfactual_appearances": 0,
+            "total_predictions": 0,
+            "layer_consistency": {},
+            "position_consistency": {},
         }
 
         for layer, layer_data in layer_results.items():
@@ -1078,52 +1180,58 @@ class FaithfulnessEvaluator:
             layer_total = 0
 
             for position_data in layer_data:
-                top_tokens = position_data.get('top_tokens', [])
+                top_tokens = position_data.get("top_tokens", [])
                 layer_total += 1
 
                 # Check if verbalization or counterfactual appear in top predictions
                 for token_str, prob in top_tokens:
                     if verbalization.lower() in token_str.lower():
                         layer_verb_count += 1
-                        consistency_metrics['verbalization_appearances'] += 1
+                        consistency_metrics["verbalization_appearances"] += 1
                     elif counterfactual.lower() in token_str.lower():
                         layer_counter_count += 1
-                        consistency_metrics['counterfactual_appearances'] += 1
+                        consistency_metrics["counterfactual_appearances"] += 1
 
             if layer_total > 0:
-                consistency_metrics['layer_consistency'][layer] = {
-                    'verbalization_rate': layer_verb_count / layer_total,
-                    'counterfactual_rate': layer_counter_count / layer_total,
-                    'preference': 'verbalization' if layer_verb_count > layer_counter_count else 'counterfactual'
+                consistency_metrics["layer_consistency"][layer] = {
+                    "verbalization_rate": layer_verb_count / layer_total,
+                    "counterfactual_rate": layer_counter_count / layer_total,
+                    "preference": "verbalization"
+                    if layer_verb_count > layer_counter_count
+                    else "counterfactual",
                 }
 
-            consistency_metrics['total_predictions'] += layer_total
+            consistency_metrics["total_predictions"] += layer_total
 
         # Calculate overall consistency
-        total_preds = consistency_metrics['total_predictions']
+        total_preds = consistency_metrics["total_predictions"]
         if total_preds > 0:
-            verb_rate = consistency_metrics['verbalization_appearances'] / total_preds
-            counter_rate = consistency_metrics['counterfactual_appearances'] / total_preds
+            verb_rate = consistency_metrics["verbalization_appearances"] / total_preds
+            counter_rate = (
+                consistency_metrics["counterfactual_appearances"] / total_preds
+            )
 
-            consistency_metrics['overall_verbalization_rate'] = verb_rate
-            consistency_metrics['overall_counterfactual_rate'] = counter_rate
-            consistency_metrics['preference_strength'] = abs(verb_rate - counter_rate)
-            consistency_metrics['dominant_preference'] = 'verbalization' if verb_rate > counter_rate else 'counterfactual'
+            consistency_metrics["overall_verbalization_rate"] = verb_rate
+            consistency_metrics["overall_counterfactual_rate"] = counter_rate
+            consistency_metrics["preference_strength"] = abs(verb_rate - counter_rate)
+            consistency_metrics["dominant_preference"] = (
+                "verbalization" if verb_rate > counter_rate else "counterfactual"
+            )
         else:
-            consistency_metrics['overall_verbalization_rate'] = 0.0
-            consistency_metrics['overall_counterfactual_rate'] = 0.0
-            consistency_metrics['preference_strength'] = 0.0
-            consistency_metrics['dominant_preference'] = 'none'
+            consistency_metrics["overall_verbalization_rate"] = 0.0
+            consistency_metrics["overall_counterfactual_rate"] = 0.0
+            consistency_metrics["preference_strength"] = 0.0
+            consistency_metrics["dominant_preference"] = "none"
 
         return consistency_metrics
 
-    def _compare_layer_predictions(self,
-                                verb_evolution: Dict,
-                                counter_evolution: Dict) -> Dict[str, Any]:
+    def _compare_layer_predictions(
+        self, verb_evolution: Dict, counter_evolution: Dict
+    ) -> Dict[str, Any]:
         """Compare how predictions evolve across layers"""
 
-        verb_by_layer = verb_evolution.get('average_by_layer', {})
-        counter_by_layer = counter_evolution.get('average_by_layer', {})
+        verb_by_layer = verb_evolution.get("average_by_layer", {})
+        counter_by_layer = counter_evolution.get("average_by_layer", {})
 
         layer_comparison = {}
 
@@ -1135,19 +1243,21 @@ class FaithfulnessEvaluator:
             total = verb_prob + counter_prob
             if total > 0:
                 verb_dominance = verb_prob / total
-                winner = 'verbalization' if verb_prob > counter_prob else 'counterfactual'
+                winner = (
+                    "verbalization" if verb_prob > counter_prob else "counterfactual"
+                )
                 confidence = abs(verb_prob - counter_prob) / total
             else:
                 verb_dominance = 0.5
-                winner = 'tie'
+                winner = "tie"
                 confidence = 0.0
 
             layer_comparison[layer] = {
-                'verbalization_prob': verb_prob,
-                'counterfactual_prob': counter_prob,
-                'verbalization_dominance': verb_dominance,
-                'winner': winner,
-                'confidence': confidence
+                "verbalization_prob": verb_prob,
+                "counterfactual_prob": counter_prob,
+                "verbalization_dominance": verb_dominance,
+                "winner": winner,
+                "confidence": confidence,
             }
 
         # Calculate transition points
@@ -1155,37 +1265,50 @@ class FaithfulnessEvaluator:
         transitions = []
 
         for i in range(1, len(layers_sorted)):
-            prev_layer = layers_sorted[i-1]
+            prev_layer = layers_sorted[i - 1]
             curr_layer = layers_sorted[i]
 
-            prev_winner = layer_comparison[prev_layer]['winner']
-            curr_winner = layer_comparison[curr_layer]['winner']
+            prev_winner = layer_comparison[prev_layer]["winner"]
+            curr_winner = layer_comparison[curr_layer]["winner"]
 
             if prev_winner != curr_winner:
-                transitions.append({
-                    'from_layer': prev_layer,
-                    'to_layer': curr_layer,
-                    'change': f"{prev_winner} -> {curr_winner}"
-                })
+                transitions.append(
+                    {
+                        "from_layer": prev_layer,
+                        "to_layer": curr_layer,
+                        "change": f"{prev_winner} -> {curr_winner}",
+                    }
+                )
 
         return {
-            'layer_by_layer': layer_comparison,
-            'transitions': transitions,
-            'final_winner': layer_comparison.get(max(layers_sorted), {}).get('winner', 'none') if layers_sorted else 'none',
-            'num_transitions': len(transitions)
+            "layer_by_layer": layer_comparison,
+            "transitions": transitions,
+            "final_winner": layer_comparison.get(max(layers_sorted), {}).get(
+                "winner", "none"
+            )
+            if layers_sorted
+            else "none",
+            "num_transitions": len(transitions),
         }
 
-    def evaluate_patchscopes(self,
-                           prompt: str,
-                           object_entity: str,
-                           verbalization: str,
-                           counterfactual: str) -> Dict[str, Any]:
+    def evaluate_patchscopes(
+        self, prompt: str, object_entity: str, verbalization: str, counterfactual: str
+    ) -> Dict[str, Any]:
         """Analyze patchscopes for faithfulness"""
         try:
             # Get target layers for analysis
-            n_layers = getattr(self.model.config, 'num_hidden_layers',
-                             getattr(self.model.config, 'n_layer', 12))
-            target_layers = [0, n_layers//4, n_layers//2, 3*n_layers//4, n_layers-1]
+            n_layers = getattr(
+                self.model.config,
+                "num_hidden_layers",
+                getattr(self.model.config, "n_layer", 12),
+            )
+            target_layers = [
+                0,
+                n_layers // 4,
+                n_layers // 2,
+                3 * n_layers // 4,
+                n_layers - 1,
+            ]
 
             # Perform patchscope analysis
             results = perform_patchscope_analysis(
@@ -1194,7 +1317,7 @@ class FaithfulnessEvaluator:
                 prompt=prompt,
                 target_entities=[object_entity, verbalization, counterfactual],
                 max_tokens=20,
-                target_layers=target_layers
+                target_layers=target_layers,
             )
             print(results)
 
@@ -1204,69 +1327,85 @@ class FaithfulnessEvaluator:
                 tokenizer=self.tokenizer,
                 prompt=prompt,
                 entities=[object_entity, verbalization, counterfactual],
-                max_tokens=15
+                max_tokens=15,
             )
 
             # Calculate faithfulness based on entity consistency
-            entity_traces = results.get('entity_traces', {})
+            entity_traces = results.get("entity_traces", {})
 
             object_trace = entity_traces.get(object_entity, [])
             verb_trace = entity_traces.get(verbalization, [])
             counter_trace = entity_traces.get(counterfactual, [])
 
             # Calculate average confidence scores
-            object_confidence = np.mean([step.get('probability', 0) for step in object_trace]) if object_trace else 0
-            verb_confidence = np.mean([step.get('probability', 0) for step in verb_trace]) if verb_trace else 0
-            counter_confidence = np.mean([step.get('probability', 0) for step in counter_trace]) if counter_trace else 0
+            object_confidence = (
+                np.mean([step.get("probability", 0) for step in object_trace])
+                if object_trace
+                else 0
+            )
+            verb_confidence = (
+                np.mean([step.get("probability", 0) for step in verb_trace])
+                if verb_trace
+                else 0
+            )
+            counter_confidence = (
+                np.mean([step.get("probability", 0) for step in counter_trace])
+                if counter_trace
+                else 0
+            )
 
             print(object_confidence, verb_confidence, counter_confidence)
 
             # Faithfulness score based on relative confidences
             total_confidence = verb_confidence + counter_confidence
-            faithfulness_score = verb_confidence / total_confidence if total_confidence > 0 else 0.5
+            faithfulness_score = (
+                verb_confidence / total_confidence if total_confidence > 0 else 0.5
+            )
 
             return {
-                'entity_traces': entity_traces,
-                'trajectory_results': trajectory_results,
-                'object_confidence': object_confidence,
-                'verbalization_confidence': verb_confidence,
-                'counterfactual_confidence': counter_confidence,
-                'faithfulness_score': faithfulness_score,
-                'generation_summary': results.get('summary', {})
+                "entity_traces": entity_traces,
+                "trajectory_results": trajectory_results,
+                "object_confidence": object_confidence,
+                "verbalization_confidence": verb_confidence,
+                "counterfactual_confidence": counter_confidence,
+                "faithfulness_score": faithfulness_score,
+                "generation_summary": results.get("summary", {}),
             }
 
         except Exception as e:
             logger.error(f"Error in patchscope analysis: {e}")
-            return {'error': str(e), 'faithfulness_score': 0.5}
+            return {"error": str(e), "faithfulness_score": 0.5}
 
-    def evaluate_ensemble_method(self,
-                                reasoning_results: Dict,
-                                subsequence_results: Dict,
-                                logit_results: Dict,
-                                patchscope_results: Dict,
-                                prompt: str,
-                                object_entity: str) -> Dict[str, Any]:
+    def evaluate_ensemble_method(
+        self,
+        reasoning_results: Dict,
+        subsequence_results: Dict,
+        logit_results: Dict,
+        patchscope_results: Dict,
+        prompt: str,
+        object_entity: str,
+    ) -> Dict[str, Any]:
         """Combine all LTR methods for ensemble faithfulness evaluation"""
         try:
             # Extract individual faithfulness scores
-            reasoning_score = reasoning_results.get('faithfulness_score', 0.0)
-            subsequence_score = subsequence_results.get('faithfulness_score', 0.0)
-            logit_score = logit_results.get('faithfulness_score', 0.0)
-            patchscope_score = patchscope_results.get('faithfulness_score', 0.0)
+            reasoning_score = reasoning_results.get("faithfulness_score", 0.0)
+            subsequence_score = subsequence_results.get("faithfulness_score", 0.0)
+            logit_score = logit_results.get("faithfulness_score", 0.0)
+            patchscope_score = patchscope_results.get("faithfulness_score", 0.0)
 
             # Weighted ensemble (adjust weights based on method reliability)
             weights = {
-                'reasoning': 0.3,    # Reasoning paths are fundamental
-                'subsequence': 0.25, # Causal analysis is important
-                'logit_lens': 0.2,   # Token evolution shows processing
-                'patchscopes': 0.25  # Entity tracking shows consistency
+                "reasoning": 0.3,  # Reasoning paths are fundamental
+                "subsequence": 0.25,  # Causal analysis is important
+                "logit_lens": 0.2,  # Token evolution shows processing
+                "patchscopes": 0.25,  # Entity tracking shows consistency
             }
 
             ensemble_score = (
-                weights['reasoning'] * reasoning_score +
-                weights['subsequence'] * subsequence_score +
-                weights['logit_lens'] * logit_score +
-                weights['patchscopes'] * patchscope_score
+                weights["reasoning"] * reasoning_score
+                + weights["subsequence"] * subsequence_score
+                + weights["logit_lens"] * logit_score
+                + weights["patchscopes"] * patchscope_score
             )
 
             # Additional ensemble features
@@ -1288,7 +1427,9 @@ class FaithfulnessEvaluator:
                     target_positions=[5],  # Intervene early in sequence
                     patch_positions=[10],  # Effect on later positions
                 )
-                causal_strength = causal_results.get('intervention_effects', {}).get('avg_effect', 0.0)
+                causal_strength = causal_results.get("intervention_effects", {}).get(
+                    "avg_effect", 0.0
+                )
             except:
                 causal_strength = 0.0
 
@@ -1298,40 +1439,48 @@ class FaithfulnessEvaluator:
                     model=self.model,
                     tokenizer=self.tokenizer,
                     prompt=prompt,
-                    concepts=[object_entity]
+                    concepts=[object_entity],
                 )
-                attention_focus = np.mean(list(attention_results.get('concept_attention', {}).get(object_entity, {}).values()))
+                attention_focus = np.mean(
+                    list(
+                        attention_results.get("concept_attention", {})
+                        .get(object_entity, {})
+                        .values()
+                    )
+                )
             except:
                 attention_focus = 0.0
 
             # Adjust ensemble score with additional features
             ensemble_score_adjusted = (
-                ensemble_score * 0.7 +
-                consistency * 0.1 +
-                causal_strength * 0.1 +
-                attention_focus * 0.1
+                ensemble_score * 0.7
+                + consistency * 0.1
+                + causal_strength * 0.1
+                + attention_focus * 0.1
             )
 
             return {
-                'ensemble_score': ensemble_score,
-                'ensemble_score_adjusted': ensemble_score_adjusted,
-                'individual_scores': {
-                    'reasoning': reasoning_score,
-                    'subsequence': subsequence_score,
-                    'logit_lens': logit_score,
-                    'patchscopes': patchscope_score
+                "ensemble_score": ensemble_score,
+                "ensemble_score_adjusted": ensemble_score_adjusted,
+                "individual_scores": {
+                    "reasoning": reasoning_score,
+                    "subsequence": subsequence_score,
+                    "logit_lens": logit_score,
+                    "patchscopes": patchscope_score,
                 },
-                'weights': weights,
-                'consistency': consistency,
-                'confidence': confidence,
-                'causal_strength': causal_strength,
-                'attention_focus': attention_focus,
-                'method_agreement': len([s for s in scores if s > 0.5])  # How many methods agree
+                "weights": weights,
+                "consistency": consistency,
+                "confidence": confidence,
+                "causal_strength": causal_strength,
+                "attention_focus": attention_focus,
+                "method_agreement": len(
+                    [s for s in scores if s > 0.5]
+                ),  # How many methods agree
             }
 
         except Exception as e:
             logger.error(f"Error in ensemble method: {e}")
-            return {'ensemble_score': 0.5, 'error': str(e)}
+            return {"ensemble_score": 0.5, "error": str(e)}
 
     def _predict_proba_for_shap(self, texts):
         """Helper function for SHAP explainer"""
@@ -1341,7 +1490,9 @@ class FaithfulnessEvaluator:
         probas = []
         for text in texts:
             try:
-                inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                inputs = self.tokenizer(
+                    text, return_tensors="pt", truncation=True, max_length=512
+                )
                 with torch.no_grad():
                     outputs = self.model(**inputs.to(self.model.device))
 
@@ -1357,18 +1508,16 @@ class FaithfulnessEvaluator:
                 no_prob = probs[no_tokens[0]].item() if no_tokens else 0.1
 
                 total = yes_prob + no_prob
-                probas.append([no_prob/total, yes_prob/total])
+                probas.append([no_prob / total, yes_prob / total])
 
             except Exception as e:
                 probas.append([0.5, 0.5])  # Default neutral prediction
 
         return np.array(probas)
 
-    def evaluate_baseline_methods(self,
-                                prompt: str,
-                                label: bool) -> Dict[str, float]:
+    def evaluate_baseline_methods(self, prompt: str, label: bool) -> Dict[str, float]:
         """Evaluate LIME and SHAP baselines"""
-        results = {'lime_score': 0.0, 'shap_score': 0.0}
+        results = {"lime_score": 0.0, "shap_score": 0.0}
 
         try:
             # LIME analysis
@@ -1377,13 +1526,15 @@ class FaithfulnessEvaluator:
                     prompt,
                     self._predict_proba_for_shap,
                     num_features=10,
-                    num_samples=100
+                    num_samples=100,
                 )
 
                 # Extract feature importance for the predicted class
                 target_class = 1 if label else 0
                 lime_scores = dict(lime_explanation.as_list())
-                results['lime_score'] = np.mean([abs(score) for score in lime_scores.values()])
+                results["lime_score"] = np.mean(
+                    [abs(score) for score in lime_scores.values()]
+                )
 
         except Exception as e:
             logger.warning(f"LIME analysis failed: {e}")
@@ -1392,16 +1543,20 @@ class FaithfulnessEvaluator:
             # SHAP analysis (simplified)
             if self.shap_explainer is not None:
                 shap_values = self.shap_explainer([prompt])
-                results['shap_score'] = np.mean(np.abs(shap_values.values)) if hasattr(shap_values, 'values') else 0.0
+                results["shap_score"] = (
+                    np.mean(np.abs(shap_values.values))
+                    if hasattr(shap_values, "values")
+                    else 0.0
+                )
 
         except Exception as e:
             logger.warning(f"SHAP analysis failed: {e}")
 
         return results
 
-    def evaluate_sample(self,
-                       sample: pd.Series,
-                       sample_id: str = None) -> FaithfulnessResult:
+    def evaluate_sample(
+        self, sample: pd.Series, sample_id: str = None
+    ) -> FaithfulnessResult:
         """Evaluate a single sample using all methods"""
 
         if sample_id is None:
@@ -1410,11 +1565,11 @@ class FaithfulnessEvaluator:
         logger.info(f"Evaluating sample {sample_id}")
 
         # Extract sample data
-        prompt = sample['prompt']
-        label = sample['label']
-        object_entity = sample['object']
-        verbalization = sample['verbalization']
-        counterfactual = sample['counterfactual_verbalization']
+        prompt = sample["prompt"]
+        label = sample["label"]
+        object_entity = sample["object"]
+        verbalization = sample["verbalization"]
+        counterfactual = sample["counterfactual_verbalization"]
 
         # Run all evaluation methods
         logger.debug("Running reasoning path analysis...")
@@ -1428,9 +1583,7 @@ class FaithfulnessEvaluator:
         )
 
         logger.debug("Running logit lens analysis...")
-        logit_results = self.evaluate_logit_lens(
-            prompt, verbalization, counterfactual
-        )
+        logit_results = self.evaluate_logit_lens(prompt, verbalization, counterfactual)
 
         logger.debug("Running patchscope analysis...")
         patchscope_results = self.evaluate_patchscopes(
@@ -1439,19 +1592,24 @@ class FaithfulnessEvaluator:
 
         logger.debug("Running ensemble method...")
         ensemble_results = self.evaluate_ensemble_method(
-            reasoning_results, subsequence_results, logit_results, patchscope_results,
-            prompt, object_entity
+            reasoning_results,
+            subsequence_results,
+            logit_results,
+            patchscope_results,
+            prompt,
+            object_entity,
         )
 
         logger.debug("Running baseline methods...")
         baseline_results = self.evaluate_baseline_methods(prompt, label)
 
         # Calculate overall faithfulness score
-        ensemble_score = ensemble_results.get('ensemble_score_adjusted',
-                                            ensemble_results.get('ensemble_score', 0.5))
+        ensemble_score = ensemble_results.get(
+            "ensemble_score_adjusted", ensemble_results.get("ensemble_score", 0.5)
+        )
 
         # Calculate confidence based on method agreement
-        confidence = ensemble_results.get('confidence', 0.5)
+        confidence = ensemble_results.get("confidence", 0.5)
 
         # Determine interpretability ranking
         if ensemble_score > 0.7 and confidence > 0.6:
@@ -1473,17 +1631,19 @@ class FaithfulnessEvaluator:
             logit_lens=logit_results,
             patchscopes=patchscope_results,
             ensemble_score=ensemble_score,
-            lime_score=baseline_results['lime_score'],
-            shap_score=baseline_results['shap_score'],
+            lime_score=baseline_results["lime_score"],
+            shap_score=baseline_results["shap_score"],
             faithfulness_score=ensemble_score,
             confidence=confidence,
-            interpretability_rank=interpretability_rank
+            interpretability_rank=interpretability_rank,
         )
 
-    def evaluate_dataset(self,
-                        df: pd.DataFrame,
-                        output_dir: str = "faithfulness_evaluation_results",
-                        sample_limit: Optional[int] = None) -> Dict[str, Any]:
+    def evaluate_dataset(
+        self,
+        df: pd.DataFrame,
+        output_dir: str = "faithfulness_evaluation_results",
+        sample_limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Evaluate entire dataset"""
 
         # Create output directory
@@ -1498,7 +1658,9 @@ class FaithfulnessEvaluator:
 
         # Evaluate all samples
         results = []
-        for idx, sample in tqdm(df.iterrows(), total=len(df), desc="Evaluating samples"):
+        for idx, sample in tqdm(
+            df.iterrows(), total=len(df), desc="Evaluating samples"
+        ):
             try:
                 result = self.evaluate_sample(sample, f"sample_{idx}")
                 results.append(result)
@@ -1518,9 +1680,9 @@ class FaithfulnessEvaluator:
         self.save_results(results, aggregate_results, output_dir)
 
         return {
-            'individual_results': results,
-            'aggregate_results': aggregate_results,
-            'output_dir': output_dir
+            "individual_results": results,
+            "aggregate_results": aggregate_results,
+            "output_dir": output_dir,
         }
 
     def aggregate_results(self, results: List[FaithfulnessResult]) -> Dict[str, Any]:
@@ -1536,130 +1698,175 @@ class FaithfulnessEvaluator:
         shap_scores = [r.shap_score for r in results]
 
         # Method-specific scores
-        reasoning_scores = [r.reasoning_paths.get('faithfulness_score', 0) for r in results]
-        subsequence_scores = [r.subsequence_analysis.get('faithfulness_score', 0) for r in results]
-        logit_scores = [r.logit_lens.get('faithfulness_score', 0) for r in results]
-        patchscope_scores = [r.patchscopes.get('faithfulness_score', 0) for r in results]
+        reasoning_scores = [
+            r.reasoning_paths.get("faithfulness_score", 0) for r in results
+        ]
+        subsequence_scores = [
+            r.subsequence_analysis.get("faithfulness_score", 0) for r in results
+        ]
+        logit_scores = [r.logit_lens.get("faithfulness_score", 0) for r in results]
+        patchscope_scores = [
+            r.patchscopes.get("faithfulness_score", 0) for r in results
+        ]
 
         # Calculate correlations with ground truth labels
         labels = [r.label for r in results]
 
         def safe_correlation(x, y):
             try:
-                return np.corrcoef(x, y)[0, 1] if len(set(x)) > 1 and len(set(y)) > 1 else 0.0
+                return (
+                    np.corrcoef(x, y)[0, 1]
+                    if len(set(x)) > 1 and len(set(y)) > 1
+                    else 0.0
+                )
             except:
                 return 0.0
 
         return {
-            'total_samples': len(results),
-            'average_scores': {
-                'ensemble': np.mean(ensemble_scores),
-                'confidence': np.mean(confidence_scores),
-                'reasoning_paths': np.mean(reasoning_scores),
-                'subsequence_analysis': np.mean(subsequence_scores),
-                'logit_lens': np.mean(logit_scores),
-                'patchscopes': np.mean(patchscope_scores),
-                'lime': np.mean(lime_scores),
-                'shap': np.mean(shap_scores)
+            "total_samples": len(results),
+            "average_scores": {
+                "ensemble": np.mean(ensemble_scores),
+                "confidence": np.mean(confidence_scores),
+                "reasoning_paths": np.mean(reasoning_scores),
+                "subsequence_analysis": np.mean(subsequence_scores),
+                "logit_lens": np.mean(logit_scores),
+                "patchscopes": np.mean(patchscope_scores),
+                "lime": np.mean(lime_scores),
+                "shap": np.mean(shap_scores),
             },
-            'std_scores': {
-                'ensemble': np.std(ensemble_scores),
-                'confidence': np.std(confidence_scores),
-                'reasoning_paths': np.std(reasoning_scores),
-                'subsequence_analysis': np.std(subsequence_scores),
-                'logit_lens': np.std(logit_scores),
-                'patchscopes': np.std(patchscope_scores),
-                'lime': np.std(lime_scores),
-                'shap': np.std(shap_scores)
+            "std_scores": {
+                "ensemble": np.std(ensemble_scores),
+                "confidence": np.std(confidence_scores),
+                "reasoning_paths": np.std(reasoning_scores),
+                "subsequence_analysis": np.std(subsequence_scores),
+                "logit_lens": np.std(logit_scores),
+                "patchscopes": np.std(patchscope_scores),
+                "lime": np.std(lime_scores),
+                "shap": np.std(shap_scores),
             },
-            'correlations_with_labels': {
-                'ensemble': safe_correlation(ensemble_scores, labels),
-                'reasoning_paths': safe_correlation(reasoning_scores, labels),
-                'subsequence_analysis': safe_correlation(subsequence_scores, labels),
-                'logit_lens': safe_correlation(logit_scores, labels),
-                'patchscopes': safe_correlation(patchscope_scores, labels),
-                'lime': safe_correlation(lime_scores, labels),
-                'shap': safe_correlation(shap_scores, labels)
+            "correlations_with_labels": {
+                "ensemble": safe_correlation(ensemble_scores, labels),
+                "reasoning_paths": safe_correlation(reasoning_scores, labels),
+                "subsequence_analysis": safe_correlation(subsequence_scores, labels),
+                "logit_lens": safe_correlation(logit_scores, labels),
+                "patchscopes": safe_correlation(patchscope_scores, labels),
+                "lime": safe_correlation(lime_scores, labels),
+                "shap": safe_correlation(shap_scores, labels),
             },
-            'interpretability_distribution': {
+            "interpretability_distribution": {
                 rank: sum(1 for r in results if r.interpretability_rank == rank)
-                for rank in ['High', 'Medium', 'Low']
+                for rank in ["High", "Medium", "Low"]
             },
-            'method_agreement': {
-                'high_agreement': sum(1 for r in results if r.confidence > 0.7),
-                'medium_agreement': sum(1 for r in results if 0.4 <= r.confidence <= 0.7),
-                'low_agreement': sum(1 for r in results if r.confidence < 0.4)
-            }
+            "method_agreement": {
+                "high_agreement": sum(1 for r in results if r.confidence > 0.7),
+                "medium_agreement": sum(
+                    1 for r in results if 0.4 <= r.confidence <= 0.7
+                ),
+                "low_agreement": sum(1 for r in results if r.confidence < 0.4),
+            },
         }
 
-    def create_visualizations(self,
-                            results: List[FaithfulnessResult],
-                            aggregate_results: Dict[str, Any],
-                            output_dir: str):
+    def create_visualizations(
+        self,
+        results: List[FaithfulnessResult],
+        aggregate_results: Dict[str, Any],
+        output_dir: str,
+    ):
         """Create comprehensive visualizations"""
 
         # Set up the plotting style
-        plt.style.use('seaborn-v0_8')
+        plt.style.use("seaborn-v0_8")
         sns.set_palette("husl")
 
         # Figure 1: Method comparison
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
 
         # Plot 1: Average scores by method
-        methods = ['ensemble', 'reasoning_paths', 'subsequence_analysis', 'logit_lens', 'patchscopes', 'lime', 'shap']
-        avg_scores = [aggregate_results['average_scores'][method] for method in methods]
-        std_scores = [aggregate_results['std_scores'][method] for method in methods]
+        methods = [
+            "ensemble",
+            "reasoning_paths",
+            "subsequence_analysis",
+            "logit_lens",
+            "patchscopes",
+            "lime",
+            "shap",
+        ]
+        avg_scores = [aggregate_results["average_scores"][method] for method in methods]
+        std_scores = [aggregate_results["std_scores"][method] for method in methods]
 
-        results_df = pd.DataFrame({
-            'Method': methods,
-            'Average Score': avg_scores,
-            'Std. Deviation': std_scores
-        })
+        results_df = pd.DataFrame(
+            {
+                "Method": methods,
+                "Average Score": avg_scores,
+                "Std. Deviation": std_scores,
+            }
+        )
 
         print(results_df)
 
         bars = ax1.bar(methods, avg_scores, yerr=std_scores, capsize=5, alpha=0.7)
-        ax1.set_title('Average Faithfulness Scores by Method')
-        ax1.set_ylabel('Faithfulness Score')
-        ax1.tick_params(axis='x', rotation=45)
+        ax1.set_title("Average Faithfulness Scores by Method")
+        ax1.set_ylabel("Faithfulness Score")
+        ax1.tick_params(axis="x", rotation=45)
         ax1.grid(True, alpha=0.3)
 
         # Add value labels on bars
         for bar, score in zip(bars, avg_scores):
             height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                    f'{score:.3f}', ha='center', va='bottom', fontsize=9)
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height + 0.01,
+                f"{score:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
 
         # Plot 2: Correlation with ground truth
-        correlations = [aggregate_results['correlations_with_labels'][method] for method in methods]
-        bars2 = ax2.bar(methods, correlations, alpha=0.7, color='orange')
-        ax2.set_title('Correlation with Ground Truth Labels')
-        ax2.set_ylabel('Correlation Coefficient')
-        ax2.tick_params(axis='x', rotation=45)
+        correlations = [
+            aggregate_results["correlations_with_labels"][method] for method in methods
+        ]
+        bars2 = ax2.bar(methods, correlations, alpha=0.7, color="orange")
+        ax2.set_title("Correlation with Ground Truth Labels")
+        ax2.set_ylabel("Correlation Coefficient")
+        ax2.tick_params(axis="x", rotation=45)
         ax2.grid(True, alpha=0.3)
-        ax2.axhline(y=0, color='red', linestyle='--', alpha=0.5)
+        ax2.axhline(y=0, color="red", linestyle="--", alpha=0.5)
 
         # Plot 3: Distribution of ensemble scores
         ensemble_scores = [r.ensemble_score for r in results]
-        ax3.hist(ensemble_scores, bins=20, alpha=0.7, edgecolor='black')
-        ax3.axvline(np.mean(ensemble_scores), color='red', linestyle='--',
-                   label=f'Mean: {np.mean(ensemble_scores):.3f}')
-        ax3.set_title('Distribution of Ensemble Faithfulness Scores')
-        ax3.set_xlabel('Ensemble Score')
-        ax3.set_ylabel('Frequency')
+        ax3.hist(ensemble_scores, bins=20, alpha=0.7, edgecolor="black")
+        ax3.axvline(
+            np.mean(ensemble_scores),
+            color="red",
+            linestyle="--",
+            label=f"Mean: {np.mean(ensemble_scores):.3f}",
+        )
+        ax3.set_title("Distribution of Ensemble Faithfulness Scores")
+        ax3.set_xlabel("Ensemble Score")
+        ax3.set_ylabel("Frequency")
         ax3.legend()
         ax3.grid(True, alpha=0.3)
 
         # Plot 4: Interpretability ranking distribution
-        interpretability_counts = list(aggregate_results['interpretability_distribution'].values())
-        interpretability_labels = list(aggregate_results['interpretability_distribution'].keys())
+        interpretability_counts = list(
+            aggregate_results["interpretability_distribution"].values()
+        )
+        interpretability_labels = list(
+            aggregate_results["interpretability_distribution"].keys()
+        )
 
-        pie = ax4.pie(interpretability_counts, labels=interpretability_labels, autopct='%1.1f%%',
-                     startangle=90, colors=['green', 'orange', 'red'])
-        ax4.set_title('Interpretability Ranking Distribution')
+        pie = ax4.pie(
+            interpretability_counts,
+            labels=interpretability_labels,
+            autopct="%1.1f%%",
+            startangle=90,
+            colors=["green", "orange", "red"],
+        )
+        ax4.set_title("Interpretability Ranking Distribution")
 
         plt.tight_layout()
-        plt.savefig(f"{output_dir}/method_comparison.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{output_dir}/method_comparison.png", dpi=300, bbox_inches="tight")
         plt.show()
 
         # Figure 2: Method correlation heatmap
@@ -1667,23 +1874,38 @@ class FaithfulnessEvaluator:
 
         # Create correlation matrix between methods
         method_scores = {
-            'Ensemble': [r.ensemble_score for r in results],
-            'Reasoning': [r.reasoning_paths.get('faithfulness_score', 0) for r in results],
-            'Subsequence': [r.subsequence_analysis.get('faithfulness_score', 0) for r in results],
-            'Logit Lens': [r.logit_lens.get('faithfulness_score', 0) for r in results],
-            'Patchscopes': [r.patchscopes.get('faithfulness_score', 0) for r in results],
-            'LIME': [r.lime_score for r in results],
-            'SHAP': [r.shap_score for r in results]
+            "Ensemble": [r.ensemble_score for r in results],
+            "Reasoning": [
+                r.reasoning_paths.get("faithfulness_score", 0) for r in results
+            ],
+            "Subsequence": [
+                r.subsequence_analysis.get("faithfulness_score", 0) for r in results
+            ],
+            "Logit Lens": [r.logit_lens.get("faithfulness_score", 0) for r in results],
+            "Patchscopes": [
+                r.patchscopes.get("faithfulness_score", 0) for r in results
+            ],
+            "LIME": [r.lime_score for r in results],
+            "SHAP": [r.shap_score for r in results],
         }
 
         correlation_matrix = pd.DataFrame(method_scores).corr()
 
-        sns.heatmap(correlation_matrix, annot=True, cmap='RdBu_r', center=0,
-                   square=True, fmt='.3f', cbar_kws={'label': 'Correlation'})
-        ax.set_title('Inter-Method Correlation Matrix')
+        sns.heatmap(
+            correlation_matrix,
+            annot=True,
+            cmap="RdBu_r",
+            center=0,
+            square=True,
+            fmt=".3f",
+            cbar_kws={"label": "Correlation"},
+        )
+        ax.set_title("Inter-Method Correlation Matrix")
 
         plt.tight_layout()
-        plt.savefig(f"{output_dir}/method_correlations.png", dpi=300, bbox_inches='tight')
+        plt.savefig(
+            f"{output_dir}/method_correlations.png", dpi=300, bbox_inches="tight"
+        )
         plt.show()
 
         # Figure 3: Sample-wise analysis
@@ -1692,23 +1914,27 @@ class FaithfulnessEvaluator:
         # Plot 1: Ensemble score vs confidence
         ensemble_scores = [r.ensemble_score for r in results]
         confidences = [r.confidence for r in results]
-        colors = ['green' if r.label else 'red' for r in results]
+        colors = ["green" if r.label else "red" for r in results]
 
         ax1.scatter(ensemble_scores, confidences, c=colors, alpha=0.6)
-        ax1.set_xlabel('Ensemble Faithfulness Score')
-        ax1.set_ylabel('Confidence')
-        ax1.set_title('Ensemble Score vs Confidence\n(Green=True, Red=False)')
+        ax1.set_xlabel("Ensemble Faithfulness Score")
+        ax1.set_ylabel("Confidence")
+        ax1.set_title("Ensemble Score vs Confidence\n(Green=True, Red=False)")
         ax1.grid(True, alpha=0.3)
 
         # Plot 2: Method agreement analysis
-        reasoning_scores = [r.reasoning_paths.get('faithfulness_score', 0) for r in results]
-        subsequence_scores = [r.subsequence_analysis.get('faithfulness_score', 0) for r in results]
+        reasoning_scores = [
+            r.reasoning_paths.get("faithfulness_score", 0) for r in results
+        ]
+        subsequence_scores = [
+            r.subsequence_analysis.get("faithfulness_score", 0) for r in results
+        ]
 
         ax2.scatter(reasoning_scores, subsequence_scores, alpha=0.6)
-        ax2.plot([0, 1], [0, 1], 'r--', alpha=0.5, label='Perfect Agreement')
-        ax2.set_xlabel('Reasoning Path Score')
-        ax2.set_ylabel('Subsequence Analysis Score')
-        ax2.set_title('Method Agreement: Reasoning vs Subsequence')
+        ax2.plot([0, 1], [0, 1], "r--", alpha=0.5, label="Perfect Agreement")
+        ax2.set_xlabel("Reasoning Path Score")
+        ax2.set_ylabel("Subsequence Analysis Score")
+        ax2.set_title("Method Agreement: Reasoning vs Subsequence")
         ax2.legend()
         ax2.grid(True, alpha=0.3)
 
@@ -1723,11 +1949,14 @@ class FaithfulnessEvaluator:
         correct_predictions = sum(prediction_accuracy)
         accuracy = correct_predictions / len(results)
 
-        ax3.bar(['Correct', 'Incorrect'],
-               [correct_predictions, len(results) - correct_predictions],
-               color=['green', 'red'], alpha=0.7)
-        ax3.set_title(f'Prediction Accuracy: {accuracy:.1%}')
-        ax3.set_ylabel('Number of Samples')
+        ax3.bar(
+            ["Correct", "Incorrect"],
+            [correct_predictions, len(results) - correct_predictions],
+            color=["green", "red"],
+            alpha=0.7,
+        )
+        ax3.set_title(f"Prediction Accuracy: {accuracy:.1%}")
+        ax3.set_ylabel("Number of Samples")
 
         # Plot 4: Performance by label
         true_samples = [r for r in results if r.label]
@@ -1736,82 +1965,100 @@ class FaithfulnessEvaluator:
         true_scores = [r.ensemble_score for r in true_samples]
         false_scores = [r.ensemble_score for r in false_samples]
 
-        ax4.boxplot([true_scores, false_scores], labels=['True Samples', 'False Samples'])
-        ax4.set_ylabel('Ensemble Faithfulness Score')
-        ax4.set_title('Score Distribution by Ground Truth Label')
+        ax4.boxplot(
+            [true_scores, false_scores], labels=["True Samples", "False Samples"]
+        )
+        ax4.set_ylabel("Ensemble Faithfulness Score")
+        ax4.set_title("Score Distribution by Ground Truth Label")
         ax4.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        plt.savefig(f"{output_dir}/sample_analysis.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{output_dir}/sample_analysis.png", dpi=300, bbox_inches="tight")
         plt.show()
 
         logger.info(f"Visualizations saved to {output_dir}")
 
-    def save_results(self,
-                    results: List[FaithfulnessResult],
-                    aggregate_results: Dict[str, Any],
-                    output_dir: str):
+    def save_results(
+        self,
+        results: List[FaithfulnessResult],
+        aggregate_results: Dict[str, Any],
+        output_dir: str,
+    ):
         """Save detailed results to files"""
 
         # Save aggregate results
-        with open(f"{output_dir}/aggregate_results.json", 'w') as f:
+        with open(f"{output_dir}/aggregate_results.json", "w") as f:
             json.dump(aggregate_results, f, indent=2, default=str)
 
         # Create detailed results DataFrame
         detailed_data = []
         for r in results:
-            detailed_data.append({
-                'sample_id': r.sample_id,
-                'prompt': r.prompt,
-                'label': r.label,
-                'object_entity': r.object_entity,
-                'verbalization': r.verbalization,
-                'counterfactual_verbalization': r.counterfactual_verbalization,
-                'ensemble_score': r.ensemble_score,
-                'confidence': r.confidence,
-                'interpretability_rank': r.interpretability_rank,
-                'reasoning_score': r.reasoning_paths.get('faithfulness_score', 0),
-                'subsequence_score': r.subsequence_analysis.get('faithfulness_score', 0),
-                'logit_lens_score': r.logit_lens.get('faithfulness_score', 0),
-                'patchscopes_score': r.patchscopes.get('faithfulness_score', 0),
-                'lime_score': r.lime_score,
-                'shap_score': r.shap_score,
-                'best_reasoning_path': str(r.reasoning_paths.get('best_path', [])),
-                'reasoning_path_score': r.reasoning_paths.get('best_score', 0),
-                'subsequence_causal_strength': r.subsequence_analysis.get('verbalization_causal_strength', 0),
-                'counterfactual_causal_strength': r.subsequence_analysis.get('counterfactual_causal_strength', 0)
-            })
+            detailed_data.append(
+                {
+                    "sample_id": r.sample_id,
+                    "prompt": r.prompt,
+                    "label": r.label,
+                    "object_entity": r.object_entity,
+                    "verbalization": r.verbalization,
+                    "counterfactual_verbalization": r.counterfactual_verbalization,
+                    "ensemble_score": r.ensemble_score,
+                    "confidence": r.confidence,
+                    "interpretability_rank": r.interpretability_rank,
+                    "reasoning_score": r.reasoning_paths.get("faithfulness_score", 0),
+                    "subsequence_score": r.subsequence_analysis.get(
+                        "faithfulness_score", 0
+                    ),
+                    "logit_lens_score": r.logit_lens.get("faithfulness_score", 0),
+                    "patchscopes_score": r.patchscopes.get("faithfulness_score", 0),
+                    "lime_score": r.lime_score,
+                    "shap_score": r.shap_score,
+                    "best_reasoning_path": str(r.reasoning_paths.get("best_path", [])),
+                    "reasoning_path_score": r.reasoning_paths.get("best_score", 0),
+                    "subsequence_causal_strength": r.subsequence_analysis.get(
+                        "verbalization_causal_strength", 0
+                    ),
+                    "counterfactual_causal_strength": r.subsequence_analysis.get(
+                        "counterfactual_causal_strength", 0
+                    ),
+                }
+            )
 
         detailed_df = pd.DataFrame(detailed_data)
         detailed_df.to_csv(f"{output_dir}/detailed_results.csv", index=False)
 
         # Save summary report
-        with open(f"{output_dir}/summary_report.txt", 'w') as f:
+        with open(f"{output_dir}/summary_report.txt", "w") as f:
             f.write("FAITHFULNESS EVALUATION SUMMARY REPORT\n")
             f.write("=" * 50 + "\n\n")
 
-            f.write(f"Total samples evaluated: {aggregate_results['total_samples']}\n\n")
+            f.write(
+                f"Total samples evaluated: {aggregate_results['total_samples']}\n\n"
+            )
 
             f.write("AVERAGE SCORES BY METHOD:\n")
             f.write("-" * 30 + "\n")
-            for method, score in aggregate_results['average_scores'].items():
-                f.write(f"{method:20}: {score:.3f} (±{aggregate_results['std_scores'][method]:.3f})\n")
+            for method, score in aggregate_results["average_scores"].items():
+                f.write(
+                    f"{method:20}: {score:.3f} (±{aggregate_results['std_scores'][method]:.3f})\n"
+                )
 
             f.write(f"\nCORRELATION WITH GROUND TRUTH:\n")
             f.write("-" * 30 + "\n")
-            for method, corr in aggregate_results['correlations_with_labels'].items():
+            for method, corr in aggregate_results["correlations_with_labels"].items():
                 f.write(f"{method:20}: {corr:.3f}\n")
 
             f.write(f"\nINTERPRETABILITY DISTRIBUTION:\n")
             f.write("-" * 30 + "\n")
-            for rank, count in aggregate_results['interpretability_distribution'].items():
-                percentage = count / aggregate_results['total_samples'] * 100
+            for rank, count in aggregate_results[
+                "interpretability_distribution"
+            ].items():
+                percentage = count / aggregate_results["total_samples"] * 100
                 f.write(f"{rank:10}: {count:3d} samples ({percentage:.1f}%)\n")
 
             f.write(f"\nMETHOD AGREEMENT:\n")
             f.write("-" * 30 + "\n")
-            for agreement, count in aggregate_results['method_agreement'].items():
-                percentage = count / aggregate_results['total_samples'] * 100
+            for agreement, count in aggregate_results["method_agreement"].items():
+                percentage = count / aggregate_results["total_samples"] * 100
                 f.write(f"{agreement:15}: {count:3d} samples ({percentage:.1f}%)\n")
 
         logger.info(f"Results saved to {output_dir}")
@@ -1856,20 +2103,20 @@ def main():
 
         # Run evaluation
         results = evaluator.evaluate_dataset(
-            df=df,
-            output_dir=OUTPUT_DIR,
-            sample_limit=SAMPLE_LIMIT
+            df=df, output_dir=OUTPUT_DIR, sample_limit=SAMPLE_LIMIT
         )
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("EVALUATION COMPLETE!")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Results saved to: {OUTPUT_DIR}")
         print(f"Samples evaluated: {results['aggregate_results']['total_samples']}")
-        print(f"Average ensemble score: {results['aggregate_results']['average_scores']['ensemble']:.3f}")
+        print(
+            f"Average ensemble score: {results['aggregate_results']['average_scores']['ensemble']:.3f}"
+        )
 
         # Print top-performing methods
-        avg_scores = results['aggregate_results']['average_scores']
+        avg_scores = results["aggregate_results"]["average_scores"]
         sorted_methods = sorted(avg_scores.items(), key=lambda x: x[1], reverse=True)
 
         print(f"\nTop-performing methods:")
