@@ -40,6 +40,9 @@ def analyze_causal_entities(
     elif "gpt2" in model_type:
         resid_pattern = "transformer.h.{}.ln_1"
         n_layers = model.config.n_layer
+    elif "olmo" in model_type:
+        resid_pattern = "model.layers.{}.post_attention_layernorm"
+        n_layers = model.config.num_hidden_layers
     else:
         # Default pattern as fallback
         resid_pattern = "model.layers.{}.input_layernorm"
