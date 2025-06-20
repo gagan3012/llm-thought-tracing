@@ -9,6 +9,7 @@ __pycache__/
 Racing_Thoughts/
 SAT/
 Internal_States_Reveal_Hallucination/
+llm_reasoning_tracer/
 
 # Distribution / packaging
 .Python

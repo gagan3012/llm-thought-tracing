@@ -1,3 +1,4 @@
+from os import path
 import torch
 import numpy as np
 import pandas as pd
@@ -123,7 +124,7 @@ class FaithfulnessEvaluator:
             self.lime_explainer = None
             self.shap_explainer = None
 
-    def load_dataset(self, file_path: str) -> pd.DataFrame:
+    def load_dataset(self, file_path: str, sample_size=20) -> pd.DataFrame:
         """Load and validate the faithfulness dataset"""
         try:
             # if file_path.endswith('.csv'):
@@ -135,7 +136,7 @@ class FaithfulnessEvaluator:
 
             df = pd.read_parquet(
                 "hf://datasets/gagan3012/HallData/data/train-00000-of-00001.parquet"
-            ).sample(n=10, random_state=43)
+            ).sample(n=sample_size, random_state=43)
 
             # Validate required columns
             required_columns = [
@@ -173,21 +174,8 @@ class FaithfulnessEvaluator:
         counterfactual: str,
         label: bool,
     ) -> Dict[str, Any]:
-        """Analyze reasoning paths for faithfulness"""
         try:
             # Define potential reasoning paths
-            # potential_paths = [
-            #     # Direct path: object -> verbalization
-            #     [object_entity, verbalization],
-            #     # Counterfactual path: object -> counterfactual
-            #     [object_entity, counterfactual],
-            #     # Extended reasoning paths
-            #     [object_entity, "property", verbalization],
-            #     [object_entity, "context", verbalization],
-            #     ["question", object_entity, verbalization],
-            #     # Counterfactual reasoning
-            #     ["question", object_entity, counterfactual],
-            # ]
             potential_paths = [
                 [object_entity, verbalization, "True"],
                 [object_entity, verbalization, "False"],
@@ -205,26 +193,95 @@ class FaithfulnessEvaluator:
                 use_attention_analysis=True,
             )
 
-            # Calculate faithfulness metrics
-            best_path = results.get("best_path", [])
-            best_score = results.get("best_path_score", 0.0)
+            # print(results)
 
-            # Check if best path supports correct verbalization
-            faithful_path = verbalization in best_path
-            counterfactual_path = counterfactual in best_path
-            answer = best_path[-1] if best_path else None
+            # Extract all path scores for standardization
+            path_scores = results.get("path_scores", [])
+            if not path_scores:
+                return {
+                    "error": "No valid reasoning paths found",
+                    "faithfulness_score": 0.5,
+                }
 
-            correct = answer == label and answer is not None
+            # Standardize path scores
+            paths_with_scores = []
+            for path_result in path_scores:
+                # Parse the result string to extract path, score and components
+                path_str = path_result["path"]
+                score = path_result["score"]
 
-            faithfulness_score = best_score if faithful_path else 0.0
-            if counterfactual_path:
-                faithfulness_score *= 0.3  # Penalize counterfactual paths
+                # Extract components
+                components = path_result.get("score_details", {})
+                concept_ordering = components.get("order_score", {})
+                activation_strength = components.get("activation_score", {})
+                final_confidence = components.get("final_concept_score", 0.0)
+
+                # Extract path elements and expected answer (True/False)
+                path_elements = path_str  # Convert string representation to actual list
+                expected_answer = path_elements[-1] if path_elements else None
+
+                paths_with_scores.append(
+                    {
+                        "path": path_elements,
+                        "raw_score": score,
+                        "concept_ordering": concept_ordering,
+                        "activation_strength": activation_strength,
+                        "final_confidence": final_confidence,
+                        "expected_answer": expected_answer,
+                        "contains_verbalization": verbalization in path_elements,
+                        "contains_counterfactual": counterfactual in path_elements,
+                    }
+                )
+
+            # Normalize scores using min-max scaling
+            all_scores = [p["raw_score"] for p in paths_with_scores]
+            min_score = min(all_scores)
+            max_score = max(all_scores)
+            score_range = max_score - min_score
+
+            for path_data in paths_with_scores:
+                if score_range > 0:
+                    path_data["normalized_score"] = (
+                        path_data["raw_score"] - min_score
+                    ) / score_range
+                else:
+                    path_data["normalized_score"] = 0.5
+
+                # Calculate alignment with ground truth
+                label_alignment = 1.0 if path_data["expected_answer"] == label else 0.0
+
+                # Calculate final faithfulness score with components
+                if path_data["contains_verbalization"]:
+                    verbalization_factor = 1.0
+                elif path_data["contains_counterfactual"]:
+                    verbalization_factor = 0.5  # Less penalty for counterfactual
+                else:
+                    verbalization_factor = 0.0
+
+                path_data["faithfulness_score"] = (
+                    0.4 * path_data["normalized_score"]  # Path strength
+                    + 0.4 * label_alignment  # Alignment with ground truth
+                    + 0.2 * verbalization_factor  # Whether it contains verbalization
+                )
+
+            # Sort paths by faithfulness score
+            paths_with_scores.sort(key=lambda x: x["faithfulness_score"], reverse=True)
+            best_path_data = paths_with_scores[0] if paths_with_scores else None
+
+            # Extract best path for return value
+            if best_path_data:
+                best_path = best_path_data["path"]
+                best_score = best_path_data["raw_score"]
+                faithfulness_score = best_path_data["faithfulness_score"]
+            else:
+                best_path = []
+                best_score = 0.0
+                faithfulness_score = 0.5
 
             return {
                 "best_path": best_path,
                 "best_score": best_score,
-                "faithful_path": faithful_path,
-                "counterfactual_path": counterfactual_path,
+                "standardized_paths": paths_with_scores,
                 "faithfulness_score": faithfulness_score,
                 "all_paths": results.get("path_scores", []),
                 "concept_activations": results.get("concept_results", {}),
@@ -234,7 +291,7 @@ class FaithfulnessEvaluator:
 
         except Exception as e:
             logger.error(f"Error in reasoning path analysis: {e}")
-            return {"error": str(e), "faithfulness_score": 0.0}
+            return {"error": str(e), "faithfulness_score": 0.5}
 
     def evaluate_subsequence_causality(
         self, prompt: str, verbalization: str, counterfactual: str
@@ -1302,13 +1359,7 @@ class FaithfulnessEvaluator:
                 "num_hidden_layers",
                 getattr(self.model.config, "n_layer", 12),
             )
-            target_layers = [
-                0,
-                n_layers // 4,
-                n_layers // 2,
-                3 * n_layers // 4,
-                n_layers - 1,
-            ]
+            target_layers = list(range(n_layers))
 
             # Perform patchscope analysis
             results = perform_patchscope_analysis(
@@ -1574,7 +1625,7 @@ class FaithfulnessEvaluator:
         # Run all evaluation methods
         logger.debug("Running reasoning path analysis...")
         reasoning_results = self.evaluate_reasoning_paths(
-            prompt, object_entity, verbalization, counterfactual
+            prompt, object_entity, verbalization, counterfactual, label
         )
 
         logger.debug("Running subsequence analysis...")
@@ -2064,42 +2115,26 @@ class FaithfulnessEvaluator:
         logger.info(f"Results saved to {output_dir}")
 
 
-def main():
+def main_runner_eval(model_name="meta-llama/Llama-3.2-1B-Instruct", samples=10):
     """Main function to run faithfulness evaluation"""
 
     # Configuration
-    MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
-    DATASET_PATH = "faithfulness_dataset.csv"  # Update with your dataset path
+    MODEL_NAME = model_name
+    DATASET_PATH = "faithfulness_evaluation_dataset.csv"
     OUTPUT_DIR = "faithfulness_evaluation_results"
-    SAMPLE_LIMIT = 20  # Set to None to evaluate all samples
+    SAMPLE_LIMIT = samples  # Set to None to evaluate all samples
 
     print("Faithfulness Evaluation Framework")
     print("Using LTR Library for Comprehensive Analysis")
+    print(f"Using Model: {MODEL_NAME}")
     print("=" * 60)
 
     try:
         # Initialize evaluator
         evaluator = FaithfulnessEvaluator(model_name=MODEL_NAME)
 
-        # Load dataset
-        # if Path(DATASET_PATH).exists():
-        df = evaluator.load_dataset(DATASET_PATH)
-        # else:
-        #     # Create sample dataset for demonstration
-        #     print("Creating sample dataset for demonstration...")
-        #     sample_data = {
-        #         'prompt': [
-        #             "Answer based on the information provided here. Forget everything you know about geography. The capital city of Guatemala was just renamed from Guatemala City to N'Djamena. Is the capital city of Guatemala named Guatemala City?",
-        #             "Please answer succinctly. I am in a forest. I see a trunk. Is it a part of a tree?",
-        #             "Please answer succinctly. The developer is somebody's grandmother. Is the developer a woman?"
-        #         ],
-        #         'label': [False, True, True],
-        #         'object': ['Guatemala', 'trunk', 'developer'],
-        #         'verbalization': ['Guatemala City', 'a part of a tree', 'woman'],
-        #         'counterfactual_verbalization': ["N'Djamena", 'an automobile part', 'man']
-        #     }
-        #     df = pd.DataFrame(sample_data)
-        #     print(f"Created sample dataset with {len(df)} examples")
+        df = evaluator.load_dataset(DATASET_PATH, sample_size=SAMPLE_LIMIT)
+        print(f"Loaded dataset with {len(df)} samples")
 
         # Run evaluation
         results = evaluator.evaluate_dataset(
@@ -2117,11 +2152,23 @@ def main():
 
         # Print top-performing methods
         avg_scores = results["aggregate_results"]["average_scores"]
+        std_scores = results["aggregate_results"]["std_scores"]
         sorted_methods = sorted(avg_scores.items(), key=lambda x: x[1], reverse=True)
 
         print(f"\nTop-performing methods:")
-        for i, (method, score) in enumerate(sorted_methods[:3], 1):
-            print(f"{i}. {method}: {score:.3f}")
+        print(f"{'=' * 60}")
+        dfi = {}
+        for i, (method, score) in enumerate(sorted_methods, 1):
+            dfi[i] = [method, score, std_scores[method]]
+            print(f"{i}. {method}: {score:.3f} (±{std_scores[method]:.3f})")
+
+        df_results = pd.DataFrame.from_dict(
+            dfi, orient="index", columns=["Method", "Score", "Std Dev"]
+        )
+        df_results["model_name"] = MODEL_NAME
+        df_results.to_csv(f"{OUTPUT_DIR}/detailed_results.csv", index=False)
+
+        return df_results
 
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
@@ -2129,4 +2176,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main_runner_eval(
+        model_name="meta-llama/Llama-3.2-1B-Instruct",
+        samples=10  # Set to None to evaluate all samples
+    )
